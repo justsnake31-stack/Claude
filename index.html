@@ -640,6 +640,64 @@ async function findByDigits(w, big){
   return out;
 }
 
+// ===== Main engine: PaddleOCR PP-OCRv5 (finds text lines itself + Russian recognition model), runs on the phone =====
+// Tesseract below stays only as a fallback if this engine can't load (e.g. very old iOS).
+let paddle = null, paddlePromise = null;
+async function getPaddle(){
+  if (paddle) return paddle;
+  if (!paddlePromise) paddlePromise = (async () => {
+    const { PaddleOCR } = await import("./ocr/paddle.bundle.js");
+    paddle = await PaddleOCR.create({
+      textDetectionModelName: "PP-OCRv5_mobile_det",
+      textDetectionModelAsset: { url: new URL("ocr/models/PP-OCRv5_mobile_det_onnx_infer.tar", location.href).href },
+      textRecognitionModelName: "eslav_PP-OCRv5_mobile_rec",
+      textRecognitionModelAsset: { url: new URL("ocr/models/eslav_PP-OCRv5_mobile_rec_onnx_infer.tar", location.href).href },
+      ortOptions: { backend: "wasm", wasmPaths: new URL("ocr/ort/", location.href).href },
+      worker: false,
+    });
+    return paddle;
+  })().catch(e => { paddlePromise = null; throw e; });
+  return paddlePromise;
+}
+// draw the photo rotated by 0/90/180/270°, longest side ≤ maxSide
+function rotScaled(img, rot, maxSide){
+  const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height, k = Math.min(1, maxSide / Math.max(W, H));
+  const w = Math.round(W * k), h = Math.round(H * k), c = mkCanvas(rot % 180 ? h : w, rot % 180 ? w : h), g = ctx2d(c);
+  g.imageSmoothingQuality = "high"; g.translate(c.width / 2, c.height / 2); g.rotate(rot * Math.PI / 180); g.drawImage(img, -w / 2, -h / 2, w, h);
+  return c;
+}
+// recognised pieces → text lines, top to bottom (works for tilted stickers: coordinates are turned by the median text angle)
+function paddleLines(items){
+  if (!items.length) return [];
+  const angs = items.map(i => Math.atan2(i.poly[1][1] - i.poly[0][1], i.poly[1][0] - i.poly[0][0])).sort((a, b) => a - b);
+  const a = -angs[angs.length >> 1], ca = Math.cos(a), sa = Math.sin(a);
+  const it = items.map(i => { const cx = i.poly.reduce((s, p) => s + p[0], 0) / 4, cy = i.poly.reduce((s, p) => s + p[1], 0) / 4;
+    const h = Math.hypot(i.poly[3][0] - i.poly[0][0], i.poly[3][1] - i.poly[0][1]);
+    return { t: i.text, x: cx * ca - cy * sa, y: cx * sa + cy * ca, h }; }).sort((p, q) => p.y - q.y);
+  const lines = [];
+  for (const i of it){ const L = lines.find(l => Math.abs(l.y - i.y) < Math.min(l.h, i.h) * 0.55); if (L){ L.items.push(i); L.y = (L.y + i.y) / 2; } else lines.push({ y: i.y, h: i.h, items: [i] }); }
+  return lines.sort((p, q) => p.y - q.y).map(l => l.items.sort((p, q) => p.x - q.x).map(i => i.t).join(" "));
+}
+async function recognizePaddle(file){
+  const ocr = await getPaddle(), img = await loadBitmap(file);
+  let best = null;
+  // stickers can be upside down or sideways: try orientations until one reads as a proper sticker
+  for (const rot of [0, 180, 90, 270]){
+    const c = rotScaled(img, rot, 1600);
+    const [res] = await ocr.predict(c, { textRecScoreThresh: 0.3 });
+    c.width = c.height = 0;
+    const items = res.items || [];
+    const r = parseLabel(paddleLines(items).join("\n"));
+    r.conf = items.length ? 100 * items.reduce((s, i) => s + (i.score || 0), 0) / items.length : 0;
+    r.q = quality(r);
+    if (window.__ocrLog) window.__ocrLog.push({ psm: "paddle" + rot, q: +r.q.toFixed(1), conf: Math.round(r.conf), text: r.raw });
+    if (!best || r.q > best.q) best = r;
+    if (r.timed >= 2 && !r.incomplete && !r.disorder) break;
+  }
+  img.close && img.close();
+  return best;
+}
+
 async function recognizeFile(w, file){
   const img = await loadBitmap(file);
   const big = scaled(img, 3000); img.close && img.close();
@@ -781,7 +839,7 @@ function wordScore(line){
   return Math.min(3, good * clean * (letters >= 6 ? 1.5 : 1));
 }
 function cleanName(l){
-  return l.replace(/\(\s*[+\-]?\s*\d+[^)]*\)?/g, "")     // storage temperature "(+2+4)"
+  return stripBrand(l).replace(/[+\-]?\d+\s*[+\-]\s*\d+\)?/g, " ").replace(/\(\s*[+\-]?\s*\d+[^)]*\)?/g, "")     // storage temperature "(+2+4)"
           .replace(/\(\s*[^А-Яа-яЁё)]*$/, "")                 // cut-off "( +" (but keep "(Шампиньоны…" — a misread bracket)
           .replace(/^\(\s*(?=[А-Яа-яЁё])/, "")
           .replace(/^[^А-Яа-яЁё"«]+/, "").replace(/^(?:[А-Яа-яЁё]{1,2}\s+)+(?=[А-Яа-яЁё"«]{3})/, "").replace(/[|_~*©®\\]+/g, "")
@@ -795,8 +853,8 @@ function parseLabel(text){
   let prod = null, name = "", nameScore = 0, firstDateLine = lines.findIndex(l => findDates(l).length);
   if (firstDateLine < 0) firstDateLine = lines.length;
   let bi = -1;
-  const unbrand = l => l.replace(BRANDS, " ").replace(/\S+["»”](?=\s|$|[(,])/g, " ").replace(/["«“„][^"»”]{0,40}["»”]?/g, " ");
-  lines.forEach((l, i) => { const s = wordScore(unbrand(l)) * (i < firstDateLine ? 1 : 0.5); if (s > nameScore){ nameScore = s; bi = i; } });
+  const unbrand = stripBrand;
+  lines.forEach((l, i) => { const s = wordScore(unbrand(l)) * (/^[^А-Яа-яЁё]*[а-яё]/.test(l) ? 0.4 : 1) * (i < firstDateLine ? 1 : 0.5); if (s > nameScore){ nameScore = s; bi = i; } });
   if (bi >= 0){
     name = cleanName(lines[bi]);
     const nx = lines[bi + 1];
@@ -846,7 +904,10 @@ function parseLabel(text){
     const lastD = findDates(dl[dl.length - 1]).filter(x => x.hh != null);
     incomplete = !lastD.some(x => +toDate(x) === +toDate(exp));
   }
-  const others = near.filter(x => x !== exp).sort((a, b) => toDate(a) - toDate(b));
+  // other dates on the sticker, each once (a photo may hold two identical stickers)
+  const others = [];
+  for (const x of near) if (exp && +toDate(x) !== +toDate(exp) && !others.some(o => +toDate(o) === +toDate(x))) others.push(x);
+  others.sort((a, b) => toDate(a) - toDate(b));
   // thermal font: 1 and 7 look alike. Minutes usually match between the dates on one sticker (18:11 → 12:11).
   if (exp && exp.mi != null){
     const mins = new Set(others.filter(o => o.mi != null).map(o => o.mi));
@@ -873,13 +934,25 @@ const normName = t => t.toLowerCase().replace(/ё/g, "е").replace(/[^а-яa-z0-
 const PROD_N = PRODUCTS.map(p => ({ p, n: normName(p) }));
 // Best catalogue match anywhere inside the OCR'd text (the sticker adds a brand, temperatures, may cut the first letters).
 // suppliers printed on the stickers (in quotes) — never a product name
-const BRANDS = /северн\S*\s*молок\S*|павловск\S*\s*слобод\S*|локальн\S*|агроник\S*|пир.?пак|дымов\S*|эрманн\S*|cook\s*me/gi;
+const BRANDS = /[сц]еверн\S*\s*молок\S*|[сц]еверн\S*|павловск\S*\s*слобод\S*|локальн\S*|агроник\S*|пир.?пак|дымов\S*|эрманн\S*|cook\s*me/gi;
+// Remove the supplier: an opening quote glued to a word starts the brand ("Пармезан"Пир-пак"),
+// a word ending with a quote before a space/bracket is the end of a brand (…Молоко" (+2 +6)).
+function stripBrand(text){
+  return text
+    .replace(/["«“„](?=[А-Яа-яЁёA-Za-z])[^"»”\n]{0,40}["»”]?/g, " ")
+    .replace(/\S+["»”](?=\s|$|[(,])/g, " ")
+    .replace(BRANDS, " ")
+    .replace(/["«»“”„]/g, " ");
+}
 function matchProduct(text){
   // drop the brand in quotes ("МДБ", "Северное Молоко") and storage temperatures — they are not the product
-  text = text.replace(BRANDS, " ").replace(/\S+["»”](?=\s|$|[(,])/g, " ").replace(/["«“„][^"»”]{0,40}["»”]?/g, " ").replace(/\([^)А-Яа-яЁё]*\)?/g, " ");
-  const t = normName(text); if (t.length < 3) return null;
+  text = stripBrand(text).replace(/\([^)А-Яа-яЁё]*\)?/g, " ");
+  const t0 = normName(text); if (t0.length < 3) return null;
+  // compare without spaces: PaddleOCR often glues words ("Перецсвежий")
+  const t = t0.replace(/ /g, "");
   let best = null;
-  for (const { p, n } of PROD_N){
+  for (const { p, n: n0 } of PROD_N){
+    const n = n0.replace(/ /g, "");
     if (n.length < 3) continue;
     const L = n.length; let bs = 0;
     // slide a window of about the product's length over the text
@@ -895,10 +968,10 @@ function matchProduct(text){
   }
   if (best && best.sim >= (best.p.length >= 10 ? 0.62 : 0.72)) return best;
   // first letters cut off by the container rim: a distinctive word that belongs to exactly one product
-  const words = t.split(" ").filter(x => x.length >= 5);
   const hits = new Map();
   for (const { p, n } of PROD_N) for (const pw of n.split(" ")) if (pw.length >= 6)
-    for (const ow of words){ const sc = 1 - lev(ow, pw) / pw.length; if (sc >= 0.8) hits.set(p, Math.max(hits.get(p) || 0, sc)); }
+    for (let i = 0; i + pw.length - 1 <= t.length; i++){ // the word anywhere in the glued text
+      const sc = 1 - lev(t.slice(i, i + pw.length), pw) / pw.length; if (sc >= 0.8) hits.set(p, Math.max(hits.get(p) || 0, sc)); }
   if (hits.size === 1){ const [p, sc] = [...hits][0]; return { p, sim: sc * 0.8, score: sc, partial: true }; }
   return null;
 }
@@ -937,14 +1010,22 @@ function rememberedName(nm){
 function updateProgress(){
   $("progress").hidden = !running && !queue.length;
   $("barFill").style.width = total ? (doneCount/total*100) + "%" : "0";
-  if (workers) $("progText").textContent = `Прочитано ${doneCount} из ${total} фото`;
+  if (workers || paddle) $("progText").textContent = `Прочитано ${doneCount} из ${total} фото`;
 }
+let engine = null;
 async function pump(){
   if (running) return;
   running = true; stopFlag = false; updateProgress();
   let ws;
-  try { ws = await getWorkers(); }
-  catch(e){
+  try {
+    $("progText").textContent = paddle ? "" : "Загружаю распознавание (только при первом запуске, ~38 МБ)…";
+    await getPaddle(); ws = [null];            // one photo at a time: the engine uses the whole phone
+    engine = "paddle";
+  } catch(e){
+    console.warn("PaddleOCR unavailable, falling back to Tesseract", e);
+    try { ws = await getWorkers(); engine = "tesseract"; } catch(e2){ ws = null; }
+  }
+  if (!ws){
     running = false; workersPromise = null;
     $("noAi").hidden = false;
     $("noAi").textContent = "Не удалось загрузить распознавание. При первом запуске нужен интернет — подключитесь и выберите фото ещё раз.";
@@ -954,7 +1035,7 @@ async function pump(){
     while (queue.length && !stopFlag){
       const it = queue.shift();
       try {
-        const r = await recognizeFile(w, it.file);
+        const r = engine === "paddle" ? await recognizePaddle(it.file) : await recognizeFile(w, it.file);
         it.name = r.name; it.expires = r.expires; it.raw = r.raw.slice(0, 200);
         it.note = r.note || (r.expires ? "" : "Срок не найден: " + r.raw.slice(0, 80));
         if (r.expires && r.incomplete){
@@ -1003,7 +1084,7 @@ setInterval(render, 60000);
 // refresh immediately when the app comes back from background (iOS freezes timers)
 document.addEventListener("visibilitychange", () => { if (!document.hidden){ updateDate(); render(); } });
 // warm up OCR in the background so the first batch starts faster
-if (window.Tesseract) getWorkers().then(() => { if (!running) $("progText").textContent = ""; }).catch(() => { workersPromise = null; });
+getPaddle().catch(() => {}); // start loading the engine in the background so the first photo goes faster
 learnName(""); // fill name suggestions
 })();
 </script>
