@@ -402,6 +402,48 @@ function findLabels(img){
       return { x: Math.max(0, (c.x0*C - m) * k), y: Math.max(0, (c.y0*C - m) * k), w: (pw + 2*m) * k, h: (ph + 2*m) * k }; });
 }
 
+// Keep only letter-sized ink blobs (drops container edges, shadows, specks). Returns filtered binary + text bbox.
+function letters(bin, w, h){
+  const lab = new Int32Array(w * h).fill(-1), keep = new Uint8Array(w * h).fill(255), st = [];
+  let bx0 = w, by0 = h, bx1 = -1, by1 = -1, n = 0; const hs = [];
+  for (let i = 0; i < bin.length; i++){
+    if (bin[i] || lab[i] >= 0) continue;
+    const px = []; st.push(i); lab[i] = i; let x0 = w, y0 = h, x1 = -1, y1 = -1;
+    while (st.length){ const k = st.pop(), x = k % w, y = (k / w) | 0; px.push(k);
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++){ const X = x+dx, Y = y+dy;
+        if (X >= 0 && Y >= 0 && X < w && Y < h){ const q = Y*w+X; if (!bin[q] && lab[q] < 0){ lab[q] = i; st.push(q); } } } }
+    const cw = x1 - x0 + 1, chh = y1 - y0 + 1, fill = px.length / (cw * chh);
+    if (chh >= Math.max(3, h * 0.012) && chh <= h * 0.2 && cw <= w * 0.25 && cw <= chh * 6 && fill > 0.08 && fill < 0.95 && x0 > 0 && y0 > 0 && x1 < w - 1 && y1 < h - 1){
+      for (const k of px) keep[k] = 0; n++; hs.push(chh);
+      if (x0 < bx0) bx0 = x0; if (y0 < by0) by0 = y0; if (x1 > bx1) bx1 = x1; if (y1 > by1) by1 = y1;
+    }
+  }
+  hs.sort((a, b) => a - b);
+  return { bin: keep, n, medH: hs.length ? hs[hs.length >> 1] : 0, box: n ? { x0: bx0, y0: by0, x1: bx1, y1: by1 } : null };
+}
+// The main block of text: letters glued together by smearing ~1 letter wide / half a letter tall; keep the heaviest block.
+function mainBlock(L, w, h){
+  const rx = Math.max(2, Math.round(L.medH * 1.2)), ry = Math.max(1, Math.round(L.medH * 0.6));
+  // horizontal then vertical dilation via running sums
+  const a = new Uint8Array(w * h), b = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++){ let run = 0; for (let x = -rx; x < w; x++){ if (x + rx < w && !L.bin[y*w+x+rx]) run++; if (x - rx - 1 >= 0 && !L.bin[y*w+x-rx-1]) run--; if (x >= 0) a[y*w+x] = run > 0 ? 1 : 0; } }
+  for (let x = 0; x < w; x++){ let run = 0; for (let y = -ry; y < h; y++){ if (y + ry < h && a[(y+ry)*w+x]) run++; if (y - ry - 1 >= 0 && a[(y-ry-1)*w+x]) run--; if (y >= 0) b[y*w+x] = run > 0 ? 1 : 0; } }
+  const lab = new Int32Array(w * h).fill(-1), mass = [], boxes = [], st = [];
+  for (let i = 0; i < b.length; i++) if (b[i] && lab[i] < 0){
+    const id = mass.length; let m = 0, x0 = w, y0 = h, x1 = -1, y1 = -1; st.push(i); lab[i] = id;
+    while (st.length){ const k = st.pop(), x = k % w, y = (k / w) | 0; if (!L.bin[k]) m++;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      for (const q of [k - 1, k + 1, k - w, k + w]) if (q >= 0 && q < b.length && b[q] && lab[q] < 0 && Math.abs((q % w) - x) <= 1){ lab[q] = id; st.push(q); } }
+    mass.push(m); boxes.push({ x0, y0, x1, y1 });
+  }
+  if (!mass.length) return null;
+  let best = 0; mass.forEach((m, i) => { if (m > mass[best]) best = i; });
+  const out = new Uint8Array(w * h).fill(255);
+  for (let i = 0; i < out.length; i++) if (!L.bin[i] && lab[i] === best) out[i] = 0;
+  return { bin: out, box: boxes[best] };
+}
+
 // Straighten: the angle at which rows of ink give the sharpest horizontal profile (text lines).
 function skewAngle(bin, w, h){
   const pts = []; const step = Math.max(1, Math.round(Math.sqrt(w * h / 60000)));
@@ -417,18 +459,20 @@ function skewAngle(bin, w, h){
   return best;
 }
 
-// Crop → straighten → enlarge so letters are ~40px tall → clean binary image ready for OCR
+// Crop → straighten → enlarge so letters are big enough → clean binary image ready for OCR
 function prepCrop(img, box){
   const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
   const bw = Math.min(box.w, W - box.x), bh = Math.min(box.h, H - box.y);
-  const k = Math.min(3, Math.max(1, 1300 / Math.max(bw, bh)));
-  let c = mkCanvas(bw * k, bh * k); const g = ctx2d(c); g.imageSmoothingQuality = "high";
+  const k = Math.min(3, 1400 / Math.max(bw, bh));   // normalise: same working size for any camera
+  const c = mkCanvas(bw * k, bh * k); const g = ctx2d(c); g.imageSmoothingQuality = "high";
   g.drawImage(img, box.x, box.y, bw, bh, 0, 0, c.width, c.height);
-  // estimate skew on a small copy
-  const sm = scaled(c, 500), sg = grayOf(sm), sb = binarize(sg, Math.round(sm.width / 10), 0.18);
-  const ang = skewAngle(sb, sm.width, sm.height);
+  // estimate skew on a small copy, using letters only
+  const sm = scaled(c, 600), sg = grayOf(sm), sb = binarize(sg, Math.round(sm.width / 10), 0.18, 0);
+  const L = letters(sb, sm.width, sm.height);
+  const ang = L.n >= 8 ? skewAngle(L.bin, sm.width, sm.height) : skewAngle(sb, sm.width, sm.height);
   const G = grayOf(c);
-  const bin = binToCanvas(binarize(G, Math.round(Math.max(c.width, c.height) / 14), 0.16), c.width, c.height);
+  const binArr = binarize(G, Math.round(Math.max(c.width, c.height) / 14), 0.16, 0);
+  const bin = binToCanvas(binArr, c.width, c.height);
   // contrast-stretched grayscale: better than black/white for blurry shots
   const hist = new Uint32Array(256); for (const v of G.gr) hist[v]++;
   let lo = 0, hi = 255, acc = 0; const n = G.gr.length;
@@ -436,8 +480,27 @@ function prepCrop(img, box){
   const g2 = ctx2d(c), im = g2.getImageData(0, 0, c.width, c.height), d = im.data, sc = 255 / Math.max(20, hi - lo);
   for (let i = 0, j = 0; i < n; i++, j += 4){ const v = Math.max(0, Math.min(255, (G.gr[i] - lo) * sc)); d[j] = d[j+1] = d[j+2] = v; }
   g2.putImageData(im, 0, 0);
-  const rot = x => Math.abs(ang) < 0.5 ? x : rotated(x, -ang);
-  return { canvas: rot(bin), gray: rot(c), angle: ang };
+  // rotate both, then cut to the area that holds letters (drops container edges around the sticker)
+  let rb = Math.abs(ang) < 0.5 ? bin : rotated(bin, -ang), rg = Math.abs(ang) < 0.5 ? c : rotated(c, -ang);
+  const s2 = scaled(rb, 700), g3 = grayOf(s2), b3 = new Uint8Array(g3.gr.length);
+  for (let i = 0; i < b3.length; i++) b3[i] = g3.gr[i] < 128 ? 0 : 255;
+  const L2 = letters(b3, s2.width, s2.height);
+  if (L2.n >= 6){
+    const MB = mainBlock(L2, s2.width, s2.height);
+    if (MB){
+      const f = rb.width / s2.width, m = Math.max(L2.medH * 0.8, 4) * f;
+      const x0 = Math.max(0, MB.box.x0 * f - m), y0 = Math.max(0, MB.box.y0 * f - m);
+      const x1 = Math.min(rb.width, (MB.box.x1 + 1) * f + m), y1 = Math.min(rb.height, (MB.box.y1 + 1) * f + m);
+      const cut = src => { const o = mkCanvas(x1 - x0, y1 - y0), og = ctx2d(o); og.fillStyle = "#fff"; og.fillRect(0, 0, o.width, o.height); og.drawImage(src, x0, y0, x1 - x0, y1 - y0, 0, 0, o.width, o.height); return o; };
+      // binary version: keep only letters of the main block (full resolution)
+      const gg = grayOf(rb), full = new Uint8Array(gg.gr.length);
+      for (let i = 0; i < full.length; i++){ const x = i % rb.width, y = (i / rb.width) | 0;
+        full[i] = gg.gr[i] < 128 && x >= x0 && x < x1 && y >= y0 && y < y1 ? 0 : 255; }
+      const LF = letters(full, rb.width, rb.height);
+      rb = cut(binToCanvas(LF.n >= 6 ? LF.bin : full, rb.width, rb.height)); rg = cut(rg);
+    }
+  }
+  return { canvas: rb, gray: rg, angle: ang };
 }
 function wholePhoto(img){
   const c = scaled(img, 2000), G = grayOf(c);
@@ -462,6 +525,7 @@ async function recognizeFile(w, file){
   const tryOne = async (canvas, psm) => {
     const o = await ocr(w, canvas, psm), r = parseLabel(o.text);
     r.conf = o.conf; r.q = quality(r);
+    if (window.__ocrLog) window.__ocrLog.push({ psm, q: +r.q.toFixed(1), conf: Math.round(o.conf), text: o.text });
     if (!best || r.q > best.q) best = r;
     return r;
   };
@@ -575,7 +639,8 @@ function wordScore(line){
 function cleanName(l){
   return l.replace(/\(\s*[+\-]?\s*\d+[^)]*\)?/g, "")     // storage temperature "(+2+4)"
           .replace(/\([^)]*$/, "")                            // cut-off "( +"
-          .replace(/^[^А-Яа-яЁё"«]+/, "").replace(/[|_~*©®\\]+/g, "")
+          .replace(/^[^А-Яа-яЁё"«]+/, "").replace(/^(?:[А-Яа-яЁё]{1,2}\s+)+(?=[А-Яа-яЁё"«]{3})/, "").replace(/[|_~*©®\\]+/g, "")
+          .replace(/чы/g, "цы").replace(/Чы/g, "Цы")                 // "чы" never occurs in Russian: thermal-font ц
           .replace(/\s{2,}/g, " ").replace(/[\s,.;:\-(]+$/, "").trim();
 }
 
@@ -602,6 +667,8 @@ function parseLabel(text){
   const kw = /(годен|годн[оа]?|использ\w*|употреб\w*|срок\s*годн\w*|реализ\w*)\s*(до)?/ig;
   const t = fixDigits(text); let m, byKw = null;
   while ((m = kw.exec(t))){ const after = near.find(x => x.idx >= m.index); if (after) byKw = after; }
+  const withYear = near.filter(x => x.yy != null);
+  if (withYear.length >= 2) near = withYear; // labels print full dates; fragments without a year are noise
   const timed = near.filter(x => x.hh != null);
   const pool = timed.length >= 2 ? timed : near; // stray numbers without time are usually noise
   if (byKw) exp = byKw;
