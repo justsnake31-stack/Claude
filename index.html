@@ -47,6 +47,8 @@ body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-
 header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px}
 h1{font-size:24px;font-weight:700;margin:0;text-wrap:balance}
 .date{font-family:var(--mono);font-size:14px;color:var(--muted)}
+.ver{flex-basis:100%;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--muted)}
+.ver b{font-weight:600;color:var(--fg)}
 .drop{background:var(--surface);border:2px dashed var(--line);border-radius:14px;padding:18px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
 .drop.over{border-color:var(--accent)}
 .drop p{margin:0;color:var(--muted);min-width:0;flex:1 1 240px}
@@ -129,6 +131,7 @@ body.has-fab{padding-bottom:max(110px,calc(env(safe-area-inset-bottom,0px) + 90p
   <header>
     <h1>Контроль сроков</h1>
     <span class="date" id="today"></span>
+    <div class="ver" id="ver"><span>Версия <b id="verNum"></b></span><span>Распознавание: <b id="engineName">загружается…</b></span></div>
   </header>
 
   <p class="install" id="installTip" hidden><span>Чтобы установить как приложение: нажмите <strong>«Поделиться»</strong> внизу Safari → <strong>«На экран „Домой“»</strong>.</span><button id="installClose" aria-label="Скрыть подсказку">✕</button></p>
@@ -209,10 +212,13 @@ const now = () => new Date();
 const ymd = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 const fmtDate = d => `${pad(d.getDate())}.${pad(d.getMonth()+1)}`;
 const fmtTime = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const APP_VERSION = "2.0 · 02.11.2026";
+const setEngine = t => { const e = document.getElementById("engineName"); if (e) e.textContent = t; };
 const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const standalone = window.navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
 const updateDate = () => { $("today").textContent = new Date().toLocaleDateString("ru-RU",{weekday:"long",day:"numeric",month:"long"}); };
 updateDate();
+$("verNum").textContent = APP_VERSION;
 
 // install hint for iPhone Safari
 try {
@@ -655,6 +661,7 @@ async function getPaddle(){
       ortOptions: { backend: "wasm", wasmPaths: new URL("ocr/ort/", location.href).href },
       worker: false,
     });
+    setEngine("PaddleOCR PP-OCRv5 (на телефоне)");
     return paddle;
   })().catch(e => { paddlePromise = null; throw e; });
   return paddlePromise;
@@ -1023,7 +1030,7 @@ async function pump(){
     engine = "paddle";
   } catch(e){
     console.warn("PaddleOCR unavailable, falling back to Tesseract", e);
-    try { ws = await getWorkers(); engine = "tesseract"; } catch(e2){ ws = null; }
+    try { ws = await getWorkers(); engine = "tesseract"; setEngine("Tesseract (запасной — основной не загрузился)"); } catch(e2){ ws = null; setEngine("не загрузилось — нужен интернет"); }
   }
   if (!ws){
     running = false; workersPromise = null;
@@ -1084,7 +1091,7 @@ setInterval(render, 60000);
 // refresh immediately when the app comes back from background (iOS freezes timers)
 document.addEventListener("visibilitychange", () => { if (!document.hidden){ updateDate(); render(); } });
 // warm up OCR in the background so the first batch starts faster
-getPaddle().catch(() => {}); // start loading the engine in the background so the first photo goes faster
+getPaddle().catch(() => setEngine("PaddleOCR не загрузился — будет Tesseract")); // start loading the engine in the background so the first photo goes faster
 learnName(""); // fill name suggestions
 })();
 </script>
