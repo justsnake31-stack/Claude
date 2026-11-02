@@ -118,7 +118,7 @@ details.group>summary::-webkit-details-marker{display:none}
   <p class="install" id="installTip" hidden><span>Чтобы установить как приложение: нажмите <strong>«Поделиться»</strong> внизу Safari → <strong>«На экран „Домой“»</strong>.</span><button id="installClose" aria-label="Скрыть подсказку">✕</button></p>
 
   <div class="drop" id="drop">
-    <p><strong>Сфотографируйте маркировки</strong> или выберите из галереи — можно сразу пачкой. Распознавание идёт прямо на телефоне, без интернета (после первого запуска).</p>
+    <p><strong>Сфотографируйте маркировки</strong> или выберите из галереи — можно сразу пачкой. Снимайте наклейку <strong>крупно и без бликов</strong> — так точнее. Распознавание идёт прямо на телефоне.</p>
     <div class="btns">
       <label class="btn btn-primary" for="cam">📷 Снять</label>
       <label class="btn" for="file">Из галереи</label>
@@ -173,6 +173,7 @@ details.group>summary::-webkit-details-marker{display:none}
   <p class="foot">Результаты сохраняются на этом телефоне до очистки. Фото после перезапуска приложения не показываются, остаются только названия и сроки. Проверяйте спорные позиции глазами: программа может ошибиться в цифрах, особенно на смятых или бликующих наклейках. Первый запуск требует интернета (загружается ~15 МБ), дальше работает и без него.</p>
 </div>
 
+<datalist id="names"></datalist>
 <div class="viewer" id="viewer" hidden><img id="viewerImg" alt="Фото маркировки"></div>
 
 <script>
@@ -241,11 +242,11 @@ function rowEl(it, cls){
 }
 function editor(it){
   const f = document.createElement("form"); f.className="edit";
-  const n = document.createElement("input"); n.type="text"; n.id="n-"+it.id; n.placeholder="Продукт"; n.value=it.name||"";
-  const t = document.createElement("input"); t.type="datetime-local"; t.id="t-"+it.id; t.value=it.expires||"";
+  const n = document.createElement("input"); n.type="text"; n.id="n-"+it.id; n.placeholder="Продукт"; n.value=it.name||""; n.setAttribute("list","names");
+  const t = document.createElement("input"); t.type="datetime-local"; t.id="t-"+it.id; t.value=it.expires||it.guess||"";
   const b = document.createElement("button"); b.type="submit"; b.textContent="Сохранить";
   f.append(n,t,b);
-  f.onsubmit = e => { e.preventDefault(); it.name=n.value.trim(); it.expires=t.value; it.note=(it.note||"")+(it.note?" · ":"")+"исправлено вручную"; save(); render(); };
+  f.onsubmit = e => { e.preventDefault(); it.name=n.value.trim(); it.expires=t.value; learnName(it.name); it.note=(it.note||"")+(it.note?" · ":"")+"исправлено вручную"; save(); render(); };
   return f;
 }
 
@@ -291,81 +292,265 @@ $("clearNo").onclick = () => { $("clearConfirm").hidden = true; };
 $("clearYes").onclick = () => { items.forEach(x=>x.url&&URL.revokeObjectURL(x.url)); items=[]; showExamples=false; save(); $("clearConfirm").hidden=true; render(); };
 
 // ---- recognition: on-device OCR (Tesseract.js) ----
+// Pipeline per photo: find the label in the frame → crop → straighten → enlarge → clean up (local threshold) → OCR.
+// Several variants are tried and the one that gives the most sensible dates/name wins.
 const queue = [];
-let running = false, stopFlag = false, scheduler = null, schedulerPromise = null, total = 0, doneCount = 0;
+let running = false, stopFlag = false, workers = null, workersPromise = null, total = 0, doneCount = 0;
 // iPhone Safari kills tabs that use too much memory, so keep OCR workers few there
-const WORKERS = isIOS ? 2 : Math.max(2, Math.min(6, (navigator.hardwareConcurrency || 4) - 1));
+const WORKERS = isIOS ? 2 : Math.max(2, Math.min(4, (navigator.hardwareConcurrency || 4) - 1));
+const WHITELIST = "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя0123456789.,:;/-+()\"«»№ ";
 
-async function getScheduler(){
-  if (scheduler) return scheduler;
-  if (!schedulerPromise) schedulerPromise = (async () => {
+async function getWorkers(){
+  if (workers) return workers;
+  if (!workersPromise) workersPromise = (async () => {
     if (!window.Tesseract) throw new Error("no-lib");
     $("progText").textContent = "Первый запуск: загружаю распознавание русского текста (один раз, ~15 МБ)…";
-    const s = Tesseract.createScheduler();
     const ws = await Promise.all(Array.from({length: WORKERS}, () => Tesseract.createWorker("rus", 1)));
-    for (const w of ws){
-      await w.setParameters({ tessedit_pageseg_mode: "6", preserve_interword_spaces: "1" });
-      s.addWorker(w);
-    }
-    scheduler = s; return s;
+    for (const w of ws) await w.setParameters({ preserve_interword_spaces: "1", tessedit_char_whitelist: WHITELIST, user_defined_dpi: "300" });
+    workers = ws; return ws;
   })();
-  return schedulerPromise;
+  return workersPromise;
 }
 
-// Shrink + grayscale + contrast: OCR runs much faster on ~1400px images and reads thermal labels better.
+// ---------- image helpers ----------
 async function loadBitmap(file){
   if (window.createImageBitmap){
     try { return await createImageBitmap(file, { imageOrientation: "from-image" }); } catch(e){}
     try { return await createImageBitmap(file); } catch(e){}
   }
-  // fallback for older Safari
   return await new Promise((res, rej) => { const u = URL.createObjectURL(file); const im = new Image(); im.onload = () => { URL.revokeObjectURL(u); res(im); }; im.onerror = () => { URL.revokeObjectURL(u); rej(new Error("img")); }; im.src = u; });
 }
-async function prepare(file){
-  const bmp = await loadBitmap(file);
-  const W = bmp.naturalWidth || bmp.width, H = bmp.naturalHeight || bmp.height;
-  const MAX = 1400, k = Math.min(1, MAX / Math.max(W, H));
-  const c = document.createElement("canvas");
-  c.width = Math.round(W * k); c.height = Math.round(H * k);
-  const g = c.getContext("2d", { willReadFrequently: true });
-  g.drawImage(bmp, 0, 0, c.width, c.height); bmp.close && bmp.close();
-  const im = g.getImageData(0, 0, c.width, c.height), d = im.data;
-  for (let i = 0; i < d.length; i += 4){
-    let y = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
-    y = (y - 128) * 1.5 + 128; y = y < 0 ? 0 : y > 255 ? 255 : y;
-    d[i] = d[i+1] = d[i+2] = y;
+const mkCanvas = (w, h) => { const c = document.createElement("canvas"); c.width = Math.max(1, Math.round(w)); c.height = Math.max(1, Math.round(h)); return c; };
+const ctx2d = c => c.getContext("2d", { willReadFrequently: true });
+function scaled(src, maxSide){
+  const W = src.naturalWidth || src.width, H = src.naturalHeight || src.height, k = Math.min(1, maxSide / Math.max(W, H));
+  const c = mkCanvas(W * k, H * k), g = ctx2d(c); g.imageSmoothingQuality = "high"; g.drawImage(src, 0, 0, c.width, c.height); return c;
+}
+function grayOf(c){
+  const d = ctx2d(c).getImageData(0, 0, c.width, c.height).data, n = c.width * c.height, gr = new Uint8Array(n), sat = new Uint8Array(n);
+  for (let i = 0, j = 0; i < n; i++, j += 4){
+    const r = d[j], g = d[j+1], b = d[j+2];
+    gr[i] = (r * 77 + g * 150 + b * 29) >> 8;
+    sat[i] = Math.max(r, g, b) - Math.min(r, g, b);
   }
-  g.putImageData(im, 0, 0);
-  return c;
+  return { w: c.width, h: c.height, gr, sat };
+}
+// Bradley local threshold: copes with glare and shadows on the sticker
+function binarize(G, win, t, paperK = 0.7){
+  const { w, h, gr } = G, I = new Float64Array((w + 1) * (h + 1)), out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++){ let row = 0; for (let x = 0; x < w; x++){ row += gr[y*w+x]; I[(y+1)*(w+1)+x+1] = I[y*(w+1)+x+1] + row; } }
+  const s = Math.max(4, win >> 1);
+  // brightness of the sticker paper: 92th percentile; areas much darker than it are not paper
+  const hist = new Uint32Array(256); for (let i = 0; i < gr.length; i += 3) hist[gr[i]]++;
+  let acc = 0, p92 = 255; const lim = gr.length / 3 * 0.92; for (let v = 0; v < 256; v++){ acc += hist[v]; if (acc >= lim){ p92 = v; break; } }
+  const paper = paperK ? p92 * paperK : 0;
+  for (let y = 0; y < h; y++){
+    const y0 = Math.max(0, y - s), y1 = Math.min(h, y + s + 1);
+    for (let x = 0; x < w; x++){
+      const x0 = Math.max(0, x - s), x1 = Math.min(w, x + s + 1);
+      const sum = I[y1*(w+1)+x1] - I[y0*(w+1)+x1] - I[y1*(w+1)+x0] + I[y0*(w+1)+x0];
+      const area = (x1 - x0) * (y1 - y0);
+      // ink = darker than its surroundings AND the surroundings are paper-bright (drops background clutter)
+      out[y*w+x] = gr[y*w+x] * area < sum * (1 - t) && sum > paper * area ? 0 : 255; // 0 = ink
+    }
+  }
+  return out;
+}
+function binToCanvas(bin, w, h){
+  const c = mkCanvas(w, h), g = ctx2d(c), im = g.createImageData(w, h), d = im.data;
+  for (let i = 0, j = 0; i < bin.length; i++, j += 4){ d[j] = d[j+1] = d[j+2] = bin[i]; d[j+3] = 255; }
+  g.putImageData(im, 0, 0); return c;
+}
+// rotate around the centre, keep everything, fill with white
+function rotated(src, deg, scale = 1){
+  const a = deg * Math.PI / 180, cs = Math.abs(Math.cos(a)), sn = Math.abs(Math.sin(a));
+  const w = src.width * scale, h = src.height * scale;
+  const c = mkCanvas(w * cs + h * sn, w * sn + h * cs), g = ctx2d(c);
+  g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.imageSmoothingQuality = "high";
+  g.translate(c.width / 2, c.height / 2); g.rotate(a); g.drawImage(src, -w / 2, -h / 2, w, h); return c;
+}
+
+// Find sticker-like areas: blocks with lots of sharp dark-on-light strokes (printed text / barcode).
+function findLabels(img){
+  const sm = scaled(img, 640), G = grayOf(sm), { w, h, gr } = G, C = 8;
+  const cw = Math.floor(w / C), ch = Math.floor(h / C), cell = new Uint8Array(cw * ch);
+  for (let cy = 0; cy < ch; cy++) for (let cx = 0; cx < cw; cx++){
+    let edges = 0, mx = 0, sum = 0;
+    for (let y = cy*C; y < cy*C + C; y++) for (let x = cx*C; x < cx*C + C; x++){
+      const i = y*w + x, v = gr[i]; sum += v; if (v > mx) mx = v;
+      if (x + 1 < w && y + 1 < h && Math.abs(v - gr[i+1]) + Math.abs(v - gr[i+w]) > 40) edges++;
+    }
+    cell[cy*cw + cx] = edges >= 7 && mx > 140 && sum / (C*C) > 70 ? 1 : 0;
+  }
+  // close small gaps between text lines, then connected components
+  const dil = new Uint8Array(cw * ch);
+  for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) if (cell[y*cw+x])
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++){ const X = x+dx, Y = y+dy; if (X>=0 && Y>=0 && X<cw && Y<ch) dil[Y*cw+X] = 1; }
+  const lab = new Int32Array(cw * ch).fill(-1), comps = [];
+  for (let i = 0; i < dil.length; i++) if (dil[i] && lab[i] < 0){
+    const st = [i]; lab[i] = comps.length; let n = 0, core = 0, x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
+    while (st.length){ const k = st.pop(), x = k % cw, y = (k / cw) | 0; n++; core += cell[k];
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]){ const X = x+dx, Y = y+dy; if (X>=0 && Y>=0 && X<cw && Y<ch){ const q = Y*cw+X; if (dil[q] && lab[q] < 0){ lab[q] = comps.length; st.push(q); } } } }
+    const area = (x1 - x0 + 1) * (y1 - y0 + 1);
+    comps.push({ core, score: core * Math.min(1, 2 * core / area), x0, y0, x1, y1 });
+  }
+  const k = (img.naturalWidth || img.width) / w;
+  return comps.filter(c => c.core >= 5 && (c.x1 - c.x0 + 1) * (c.y1 - c.y0 + 1) < cw * ch * 0.6)
+    .sort((a, b) => b.score - a.score).slice(0, 2)
+    .map(c => { const pw = (c.x1 - c.x0 + 1) * C, ph = (c.y1 - c.y0 + 1) * C, m = 0.08 * Math.max(pw, ph) + 6;
+      return { x: Math.max(0, (c.x0*C - m) * k), y: Math.max(0, (c.y0*C - m) * k), w: (pw + 2*m) * k, h: (ph + 2*m) * k }; });
+}
+
+// Straighten: the angle at which rows of ink give the sharpest horizontal profile (text lines).
+function skewAngle(bin, w, h){
+  const pts = []; const step = Math.max(1, Math.round(Math.sqrt(w * h / 60000)));
+  for (let y = 0; y < h; y += step) for (let x = 0; x < w; x += step) if (!bin[y*w+x]) pts.push(x - w/2, y - h/2);
+  if (pts.length < 40) return 0;
+  const R = Math.ceil(Math.hypot(w, h)) + 2, bins = new Float64Array(2 * R);
+  const score = deg => { const a = deg * Math.PI / 180, s = Math.sin(a), c = Math.cos(a); bins.fill(0);
+    for (let i = 0; i < pts.length; i += 2) bins[(R + (-pts[i] * s + pts[i+1] * c) / step) | 0]++;
+    let v = 0; for (let i = 0; i < bins.length; i++) v += bins[i] * bins[i]; return v; };
+  let best = 0, bv = -1;
+  for (let d = -88; d <= 90; d += 3){ const v = score(d); if (v > bv){ bv = v; best = d; } }
+  for (let d = best - 2.5; d <= best + 2.5; d += 0.5){ const v = score(d); if (v > bv){ bv = v; best = d; } }
+  return best;
+}
+
+// Crop → straighten → enlarge so letters are ~40px tall → clean binary image ready for OCR
+function prepCrop(img, box){
+  const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
+  const bw = Math.min(box.w, W - box.x), bh = Math.min(box.h, H - box.y);
+  const k = Math.min(3, Math.max(1, 1300 / Math.max(bw, bh)));
+  let c = mkCanvas(bw * k, bh * k); const g = ctx2d(c); g.imageSmoothingQuality = "high";
+  g.drawImage(img, box.x, box.y, bw, bh, 0, 0, c.width, c.height);
+  // estimate skew on a small copy
+  const sm = scaled(c, 500), sg = grayOf(sm), sb = binarize(sg, Math.round(sm.width / 10), 0.18);
+  const ang = skewAngle(sb, sm.width, sm.height);
+  const G = grayOf(c);
+  const bin = binToCanvas(binarize(G, Math.round(Math.max(c.width, c.height) / 14), 0.16), c.width, c.height);
+  // contrast-stretched grayscale: better than black/white for blurry shots
+  const hist = new Uint32Array(256); for (const v of G.gr) hist[v]++;
+  let lo = 0, hi = 255, acc = 0; const n = G.gr.length;
+  for (let v = 0; v < 256; v++){ acc += hist[v]; if (acc < n * 0.02) lo = v; if (acc < n * 0.97) hi = v; }
+  const g2 = ctx2d(c), im = g2.getImageData(0, 0, c.width, c.height), d = im.data, sc = 255 / Math.max(20, hi - lo);
+  for (let i = 0, j = 0; i < n; i++, j += 4){ const v = Math.max(0, Math.min(255, (G.gr[i] - lo) * sc)); d[j] = d[j+1] = d[j+2] = v; }
+  g2.putImageData(im, 0, 0);
+  const rot = x => Math.abs(ang) < 0.5 ? x : rotated(x, -ang);
+  return { canvas: rot(bin), gray: rot(c), angle: ang };
+}
+function wholePhoto(img){
+  const c = scaled(img, 2000), G = grayOf(c);
+  return binToCanvas(binarize(G, Math.round(c.width / 12), 0.16, 0), c.width, c.height);
+}
+
+async function ocr(w, canvas, psm){
+  await w.setParameters({ tessedit_pageseg_mode: String(psm) });
+  const { data } = await w.recognize(canvas);
+  return { text: data.text || "", conf: data.confidence || 0 };
+}
+
+// How believable is a result: real dates with times and a readable product name.
+function quality(r){
+  return Math.min(3, r.dates) * 3 + Math.min(3, r.timed) * 2 + r.nameScore * 2 + r.conf / 40;
+}
+
+async function recognizeFile(w, file){
+  const img = await loadBitmap(file);
+  const big = scaled(img, 3000); img.close && img.close();
+  let best = null;
+  const tryOne = async (canvas, psm) => {
+    const o = await ocr(w, canvas, psm), r = parseLabel(o.text);
+    r.conf = o.conf; r.q = quality(r);
+    if (!best || r.q > best.q) best = r;
+    return r;
+  };
+  const good = () => best && best.timed >= 2 && best.nameScore >= 1;
+  for (const box of findLabels(big)){
+    const p = prepCrop(big, box);
+    await tryOne(p.canvas, 6);
+    if (good()) break;
+    await tryOne(p.gray, 6);                         // blurry photo: grayscale reads better
+    if (good()) break;
+    await tryOne(rotated(p.canvas, 180), 6);       // label may be upside down
+    if (good()) break;
+    await tryOne(p.canvas, 11);                      // sparse text mode
+    if (good()) break;
+  }
+  if (!good()) await tryOne(wholePhoto(big), 11);
+  big.width = big.height = 0; // free memory early on iPhone
+  return best;
 }
 
 // ---- parsing the label text ----
 function fixDigits(s){
-  // typical OCR confusions inside numbers
-  return s.replace(/[OoОо](?=\d)|(?<=\d)[OoОо]/g, "0").replace(/(?<=\d)[lI|]|[lI|](?=\d)/g, "1").replace(/(?<=\d)[ЗзZ]|[ЗзZ](?=\d)/g, "3").replace(/(?<=\d)[Бб]|[Бб](?=\d)/g, "6");
+  // typical OCR confusions next to numbers
+  return s
+    .replace(/[OoОо](?=\d)|(?<=\d)[OoОо]/g, "0")
+    .replace(/(?<=\d)[lI|!]|[lI|!](?=\d)/g, "1")
+    .replace(/(?<=\d)[ЗзZ]|[ЗзZ](?=\d)/g, "3")
+    .replace(/(?<=\d)[Бб]|[Бб](?=\d)/g, "6")
+    .replace(/(?<=\d)[В]|[В](?=\d)/g, "8")
+    .replace(/(?<=\d)[Ч]|[Ч](?=\d)/g, "4");
 }
 function findDates(text){
   const t = fixDigits(text);
   const out = [];
-  // dd.mm[.yy|.yyyy] [hh:mm]  — separators . , / -
-  const re = /(\d{1,2})\s?[.,\/-]\s?(\d{1,2})(?:\s?[.,\/-]\s?(\d{2,4}))?(?:[^\d\n]{0,6}?(\d{1,2})\s?[:.]\s?(\d{2}))?/g;
+  // dd.mm[.yy|.yyyy] [hh:mm] — separators . , / - and OCR'd spaces
+  const re = /(?<!\d)(\d{1,2})\s?[.,\/-]\s?(\d{1,2})(?:\s?[.,\/-]\s?(\d{4}|\d{2}))?(?:[^\d\n]{0,5}?(\d{1,2})\s?[:.;,]\s?(\d{2})(?!\d)|[^\d\n]{1,5}(\d{2})(\d{2})(?!\d))?/g;
   let m;
   while ((m = re.exec(t))){
     const dd = +m[1], mm = +m[2];
     if (dd < 1 || dd > 31 || mm < 1 || mm > 12) continue;
-    if (m[2].length < 2 && !m[3] && m[4] == null) continue; // "1,5 кг" is not a date
-    let hh = m[4] != null ? +m[4] : null, mi = m[5] != null ? +m[5] : null;
+    if (m[2].length < 2 && !m[3] && m[4] == null && m[6] == null) continue; // "1,5 кг" is not a date
+    let hh = m[4] != null ? +m[4] : m[6] != null ? +m[6] : null, mi = m[5] != null ? +m[5] : m[7] != null ? +m[7] : null;
     if (hh != null && (hh > 23 || mi > 59)){ hh = null; mi = null; }
     let yy = m[3] ? +m[3] : null; if (yy != null && yy < 100) yy += 2000;
+    if (yy != null && Math.abs(yy - new Date().getFullYear()) > 1) yy = null; // misread year → guess
     out.push({ dd, mm, yy, hh, mi, idx: m.index, len: m[0].length });
   }
+  // Blurry photos often lose the dots/colons: "01 11 26 19 43". A label line with only digits is one date+time.
+  const Y = new Date().getFullYear() % 100;
+  const okD = x => x.dd >= 1 && x.dd <= 31 && x.mm >= 1 && x.mm <= 12;
+  const fixT = x => { if (x.hh == null || x.mi == null || x.hh > 23 || x.mi > 59){ x.hh = null; x.mi = null; } if (x.yy != null){ if (x.yy < 100) x.yy += 2000; if (Math.abs(x.yy - 2000 - Y) > 1) x.yy = null; } return x; };
+  const lines = t.split("\n"); let pos = 0;
+  for (let li = 0; li < lines.length; li++){
+    const start = pos; pos += lines[li].length + 1;
+    if ((lines[li].match(/[А-Яа-яЁё]/g) || []).length > 4) continue;
+    // a line of numbers: letters here are misread digits
+    const line = lines[li].replace(/[OoОо]/g, "0").replace(/[ЗзZ]/g, "3").replace(/[Бб]/g, "6").replace(/[В]/g, "8").replace(/[Ч]/g, "4").replace(/[Il|!]/g, "1");
+    const have = out.filter(x => x.idx >= start && x.idx < pos);
+    if (have.some(x => x.hh != null)) continue;
+    const g = line.match(/\d+/g) || [], dg = g.join("");
+    if (dg.length < 6 || dg.length > 12) continue;
+    let x = null;
+    const yearish = v => (v.length === 2 && Math.abs(+v - Y) <= 1) || (v.length === 4 && Math.abs(+v - 2000 - Y) <= 1);
+    if (g.length >= 3 && g.every(v => v.length <= 4) && g[0].length <= 2 && g[1].length <= 2){
+      // separated groups: dd mm [yy] [hh mm]
+      if (yearish(g[2])) x = { dd: +g[0], mm: +g[1], yy: +g[2], hh: g.length >= 5 && g[3].length === 2 && g[4].length === 2 ? +g[3] : null, mi: g.length >= 5 && g[4].length === 2 ? +g[4] : null };
+      else if (g.length === 4 && g[2].length === 2 && g[3].length === 2) x = { dd: +g[0], mm: +g[1], yy: null, hh: +g[2], mi: +g[3] };
+    }
+    if (!x){
+      const f = (a, b) => +dg.slice(a, b);
+      if (dg.length === 12) x = { dd: f(0,2), mm: f(2,4), yy: f(4,8), hh: f(8,10), mi: f(10,12) };
+      else if (dg.length === 10) x = { dd: f(0,2), mm: f(2,4), yy: f(4,6), hh: f(6,8), mi: f(8,10) };
+      else if (dg.length === 8) x = yearish(dg.slice(4)) ? { dd: f(0,2), mm: f(2,4), yy: f(4,8), hh: null, mi: null } : { dd: f(0,2), mm: f(2,4), yy: null, hh: f(4,6), mi: f(6,8) };
+      else if (dg.length === 6 && yearish(dg.slice(4))) x = { dd: f(0,2), mm: f(2,4), yy: f(4,6), hh: null, mi: null };
+    }
+    if (!x) continue;
+    fixT(x); if (!okD(x)) continue;
+    // time printed on the next line
+    if (x.hh == null && lines[li + 1]){ const m2 = /^\D{0,3}(\d{1,2})\D{1,3}(\d{2})\D{0,3}$/.exec(lines[li + 1]); if (m2 && +m2[1] <= 23 && +m2[2] <= 59){ x.hh = +m2[1]; x.mi = +m2[2]; } }
+    for (const h of have) out.splice(out.indexOf(h), 1);
+    out.push({ ...x, idx: start, len: line.length });
+  }
+  out.sort((a, b) => a.idx - b.idx);
   return out;
 }
 function toDate(x){
   const n = new Date();
   let y = x.yy;
   if (!y){
-    // nearest year to today
     const cands = [n.getFullYear()-1, n.getFullYear(), n.getFullYear()+1].map(Y => new Date(Y, x.mm-1, x.dd));
     cands.sort((a,b) => Math.abs(a-n) - Math.abs(b-n)); y = cands[0].getFullYear();
   }
@@ -374,65 +559,123 @@ function toDate(x){
 const iso = d => `${ymd(d)}T${fmtTime(d)}`;
 const short = x => `${pad(x.dd)}.${pad(x.mm)}${x.hh!=null?" "+pad(x.hh)+":"+pad(x.mi):""}`;
 
+// 0..3: how much a line looks like real Russian words
+function wordScore(line){
+  const words = line.match(/[А-Яа-яЁё]{3,}/g) || [];
+  let good = 0, letters = 0;
+  for (const wd of words){
+    letters += wd.length;
+    const v = (wd.match(/[аеёиоуыэюяАЕЁИОУЫЭЮЯ]/g) || []).length / wd.length;
+    if (v >= 0.2 && v <= 0.7 && !/(.)\1\1/.test(wd)) good++;
+  }
+  const clean = letters / Math.max(1, line.replace(/\s/g, "").length);
+  if (!good) return 0;
+  return Math.min(3, good * clean * (letters >= 6 ? 1.5 : 1));
+}
+function cleanName(l){
+  return l.replace(/\(\s*[+\-]?\s*\d+[^)]*\)?/g, "")     // storage temperature "(+2+4)"
+          .replace(/\([^)]*$/, "")                            // cut-off "( +"
+          .replace(/^[^А-Яа-яЁё"«]+/, "").replace(/[|_~*©®\\]+/g, "")
+          .replace(/\s{2,}/g, " ").replace(/[\s,.;:\-(]+$/, "").trim();
+}
+
 function parseLabel(text){
   const lines = text.split(/\n+/).map(s => s.replace(/\s+/g," ").trim()).filter(Boolean);
-  // name: first line with real words, not a date/keyword line
-  let name = "";
-  for (const l of lines){
-    const letters = (l.match(/[А-Яа-яЁё]/g) || []).length;
-    if (letters >= 4 && !findDates(l).length && !/^(годен|использ|употреб|срок|изготов|дата|время)/i.test(l)){ name = l.replace(/[|_~*]+/g,"").trim(); break; }
+  // name: best "wordy" line before the first date line (+ next line if it continues the name, e.g. brand in quotes)
+  let name = "", nameScore = 0, firstDateLine = lines.findIndex(l => findDates(l).length);
+  if (firstDateLine < 0) firstDateLine = lines.length;
+  let bi = -1;
+  lines.forEach((l, i) => { const s = wordScore(l) * (i < firstDateLine ? 1 : 0.5); if (s > nameScore){ nameScore = s; bi = i; } });
+  if (bi >= 0){
+    name = cleanName(lines[bi]);
+    const nx = lines[bi + 1];
+    if (nx && bi + 1 < firstDateLine && wordScore(nx) >= (/^["«]/.test(nx) ? 0.3 : 0.8) && name.length < 30) name = (name + " " + cleanName(nx)).trim();
+    name = rememberedName(name);
   }
+
   const ds = findDates(text);
+  // keep only dates near today (labels in a kitchen live for days, not months)
+  const n = Date.now();
+  let near = ds.filter(x => Math.abs(toDate(x) - n) < 120 * 864e5);
+  if (!near.length) near = ds;
   let exp = null, note = "";
-  if (ds.length >= 3){
-    // triple label: taken out / defrosted / expires
-    exp = ds[2];
-    note = `Достали ${short(ds[0])}, разморозится ${short(ds[1])}`;
-  } else {
-    // a date right after "годен до / использовать до / употребить до" wins
-    const kw = /(годен|годн[оа]?|использ\w*|употреб\w*|срок\s*годн\w*)\s*(до)?/ig;
-    let m, best = null;
-    const t = fixDigits(text);
-    while ((m = kw.exec(t))){ const after = ds.find(x => x.idx >= m.index); if (after){ best = after; } }
-    if (best) exp = best;
-    else if (ds.length === 2) exp = toDate(ds[0]) > toDate(ds[1]) ? ds[0] : ds[1];
-    else if (ds.length === 1) exp = ds[0];
-    if (ds.length === 2){ const other = ds.find(x => x !== exp); if (other) note = `Изготовлено/вскрыто ${short(other)}`; }
+  const kw = /(годен|годн[оа]?|использ\w*|употреб\w*|срок\s*годн\w*|реализ\w*)\s*(до)?/ig;
+  const t = fixDigits(text); let m, byKw = null;
+  while ((m = kw.exec(t))){ const after = near.find(x => x.idx >= m.index); if (after) byKw = after; }
+  const timed = near.filter(x => x.hh != null);
+  const pool = timed.length >= 2 ? timed : near; // stray numbers without time are usually noise
+  if (byKw) exp = byKw;
+  else if (pool.length) exp = pool.reduce((a, b) => toDate(b) > toDate(a) || (+toDate(b) === +toDate(a) && b.hh != null) ? b : a); // the latest date is the expiry
+  const others = near.filter(x => x !== exp).sort((a, b) => toDate(a) - toDate(b));
+  if (others.length >= 2) note = `Достали ${short(others[0])}, разморозка ${short(others[1])}`;
+  else if (others.length === 1) note = `Изготовлено/вскрыто ${short(others[0])}`;
+  if (exp && exp.hh == null) note += (note ? " · " : "") + "время не найдено";
+  return { name, nameScore, expires: exp ? iso(toDate(exp)) : "", note: note.trim(), raw: lines.join(" / "),
+           dates: near.length, timed: near.filter(x => x.hh != null).length };
+}
+
+// ---- remembered product names (learned from your corrections) ----
+const NAMES = "srok-names-v1";
+let knownNames = []; try { knownNames = JSON.parse(localStorage.getItem(NAMES) || "[]"); } catch(e){}
+function learnName(nm){
+  nm = (nm || "").trim(); if (nm.length < 3) return;
+  knownNames = [nm, ...knownNames.filter(x => x.toLowerCase() !== nm.toLowerCase())].slice(0, 300);
+  try { localStorage.setItem(NAMES, JSON.stringify(knownNames)); } catch(e){}
+  const dl = $("names"); if (dl) dl.replaceChildren(...knownNames.map(v => { const o = document.createElement("option"); o.value = v; return o; }));
+}
+function lev(a, b){
+  const v = Array.from({length: b.length + 1}, (_, i) => i);
+  for (let i = 1; i <= a.length; i++){ let prev = v[0]; v[0] = i;
+    for (let j = 1; j <= b.length; j++){ const tmp = v[j]; v[j] = Math.min(v[j] + 1, v[j-1] + 1, prev + (a[i-1] === b[j-1] ? 0 : 1)); prev = tmp; } }
+  return v[b.length];
+}
+function rememberedName(nm){
+  if (!nm || !knownNames.length) return nm;
+  const a = nm.toLowerCase().replace(/[^а-яё0-9 ]/g, "");
+  let best = null, bs = 0;
+  for (const k of knownNames){
+    const b = k.toLowerCase().replace(/[^а-яё0-9 ]/g, ""); if (!b) continue;
+    // compare with the start of the OCR line too, the label may carry extra words
+    const s = Math.max(1 - lev(a, b) / Math.max(a.length, b.length), 1 - lev(a.slice(0, b.length + 2), b) / Math.max(b.length, 4) - 0.1);
+    if (s > bs){ bs = s; best = k; }
   }
-  return { name, expires: exp ? iso(toDate(exp)) : "", note: (note + (exp && exp.hh == null ? (note?" · ":"") + "время не найдено" : "")).trim(), raw: lines.join(" / ") };
+  return bs >= 0.55 ? best : nm;
 }
 
 function updateProgress(){
   $("progress").hidden = !running && !queue.length;
   $("barFill").style.width = total ? (doneCount/total*100) + "%" : "0";
-  if (scheduler) $("progText").textContent = `Прочитано ${doneCount} из ${total} фото`;
+  if (workers) $("progText").textContent = `Прочитано ${doneCount} из ${total} фото`;
 }
 async function pump(){
   if (running) return;
   running = true; stopFlag = false; updateProgress();
-  let s;
-  try { s = await getScheduler(); }
+  let ws;
+  try { ws = await getWorkers(); }
   catch(e){
-    running = false; schedulerPromise = null;
+    running = false; workersPromise = null;
     $("noAi").hidden = false;
     $("noAi").textContent = "Не удалось загрузить распознавание. При первом запуске нужен интернет — подключитесь и выберите фото ещё раз.";
     updateProgress(); return;
   }
-  const one = async () => {
+  const one = async w => {
     while (queue.length && !stopFlag){
       const it = queue.shift();
       try {
-        const canvas = await prepare(it.file);
-        const { data } = await s.addJob("recognize", canvas);
-        canvas.width = canvas.height = 0; // free memory early on iPhone
-        const r = parseLabel(data.text || "");
-        it.name = r.name; it.expires = r.expires; it.note = r.note || (r.expires ? "" : "Срок не найден: " + r.raw.slice(0, 80));
+        const r = await recognizeFile(w, it.file);
+        it.name = r.name; it.expires = r.expires; it.raw = r.raw.slice(0, 200);
+        it.note = r.note || (r.expires ? "" : "Срок не найден: " + r.raw.slice(0, 80));
+        if (r.expires && r.timed === 0){
+          // labels always print a time: without one the read is unreliable → ask the user, keep the guess as a hint
+          const d = parseExp(r.expires); it.expires = ""; it.guess = r.expires;
+          it.note = `Плохо читается, возможно ${fmtDate(d)} — проверьте по фото`;
+        } else if (r.expires && r.conf < 55) it.note += (it.note ? " · " : "") + "проверьте";
       } catch(e){ it.name = it.name || ""; it.expires = ""; it.note = "Не удалось обработать фото"; }
       it.status = "done"; it.file = null; doneCount++;
       save(); render(); updateProgress();
     }
   };
-  await Promise.all(Array.from({length: WORKERS}, one));
+  await Promise.all(ws.map(one));
   running = false; updateProgress();
   if (queue.length){
     $("noAi").hidden = false; $("noAi").replaceChildren(`Остановлено. В очереди ещё ${queue.length} фото.`, " ");
@@ -441,12 +684,13 @@ async function pump(){
   } else { $("noAi").hidden = true; total = 0; doneCount = 0; }
 }
 $("stopBtn").onclick = () => { stopFlag = true; };
+if (/[?&]debug/.test(location.search)) window.__ocr = { findLabels, prepCrop, loadBitmap, scaled, parseLabel };
 
 function addFiles(files){
   const imgs = [...files].filter(f => /^image\//.test(f.type) || /\.(jpe?g|png|webp|heic|heif)$/i.test(f.name || ""));
   if (!imgs.length) return;
   showExamples = false;
-  imgs.forEach((f, k) => { const it = {id: Date.now().toString(36)+"-"+k+"-"+Math.random().toString(36).slice(2,6), file:f, url:URL.createObjectURL(f), name:"", expires:"", note:"", status:"pending", fromUpload:true}; items.push(it); queue.push(it); });
+  imgs.forEach((f, k) => { const it = {id: Date.now().toString(36)+"-"+k+"-"+Math.random().toString(36).slice(2,6), file:f, url:URL.createObjectURL(f), name:"", expires:"", note:"", status:"pending", fromUpload:true, src:f.name}; items.push(it); queue.push(it); });
   total += imgs.length;
   render(); pump();
 }
@@ -464,7 +708,8 @@ setInterval(render, 60000);
 // refresh immediately when the app comes back from background (iOS freezes timers)
 document.addEventListener("visibilitychange", () => { if (!document.hidden){ updateDate(); render(); } });
 // warm up OCR in the background so the first batch starts faster
-if (window.Tesseract) getScheduler().then(() => { if (!running) $("progText").textContent = ""; }).catch(() => { schedulerPromise = null; });
+if (window.Tesseract) getWorkers().then(() => { if (!running) $("progText").textContent = ""; }).catch(() => { workersPromise = null; });
+learnName(""); // fill name suggestions
 })();
 </script>
 
