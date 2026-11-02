@@ -414,7 +414,55 @@ function rotated(src, deg, scale = 1){
 }
 
 // Find sticker-like areas: blocks with lots of sharp dark-on-light strokes (printed text / barcode).
+// Find sticker-like areas: cells with many thin dark strokes (printed letters) sitting on bright, colourless paper.
+// Metal scratches, container edges and coloured food don't look like that.
 function findLabels(img){
+  const sm = scaled(img, 1000), G = grayOf(sm), { w, h, gr, sat } = G, C = 12;
+  const ink = binarize(G, 15, 0.12, 0);
+  // stroke pixels: a short dark run (1..7 px) with bright paper on both sides, horizontally or vertically
+  const stroke = new Uint8Array(w * h);
+  // paper: bright and not strongly coloured (relative, so warm/yellow kitchen light still counts as white)
+  const bright = i => gr[i] > 125 && sat[i] < gr[i] * 0.42;
+  for (let y = 0; y < h; y++){ let x = 0;
+    while (x < w){ if (ink[y*w+x]){ x++; continue; } let e = x; while (e < w && !ink[y*w+e]) e++;
+      const len = e - x; if (len <= 7 && x > 1 && e < w - 2 && bright(y*w+x-2) && bright(y*w+e+1)) for (let k = x; k < e; k++) stroke[y*w+k] = 1;
+      x = e; } }
+  for (let x = 0; x < w; x++){ let y = 0;
+    while (y < h){ if (ink[y*w+x]){ y++; continue; } let e = y; while (e < h && !ink[e*w+x]) e++;
+      const len = e - y; if (len <= 7 && y > 1 && e < h - 2 && bright((y-2)*w+x) && bright((e+1)*w+x)) for (let k = y; k < e; k++) stroke[k*w+x] |= 2;
+      y = e; } }
+  const cw = Math.floor(w / C), ch = Math.floor(h / C), cell = new Uint8Array(cw * ch);
+  for (let cy = 0; cy < ch; cy++) for (let cx = 0; cx < cw; cx++){
+    let s = 0, both = 0, paper = 0;
+    for (let y = cy*C; y < cy*C + C; y++) for (let x = cx*C; x < cx*C + C; x++){
+      const i = y*w + x, v = stroke[i]; if (v) s++; if (v === 3) both++; if (ink[i] && gr[i] > 140 && sat[i] < gr[i] * 0.38) paper++; }
+    // letters have strokes in both directions; paper fills most of the rest of the cell
+    cell[cy*cw + cx] = s >= 8 && both >= 1 && paper >= C*C*0.35 ? 1 : 0;
+    if (window.__cellStat) window.__cellStat[cy*cw+cx] = [s, both, paper];
+  }
+  // close small gaps between letters/lines, then connected components
+  const dil = new Uint8Array(cw * ch);
+  for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) if (cell[y*cw+x])
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -2; dx <= 2; dx++){ const X = x+dx, Y = y+dy; if (X>=0 && Y>=0 && X<cw && Y<ch) dil[Y*cw+X] = 1; }
+  const lab = new Int32Array(cw * ch).fill(-1), comps = [];
+  for (let i = 0; i < dil.length; i++) if (dil[i] && lab[i] < 0){
+    const st = [i]; lab[i] = comps.length; let core = 0, x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
+    while (st.length){ const k = st.pop(), x = k % cw, y = (k / cw) | 0; core += cell[k];
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]){ const X = x+dx, Y = y+dy; if (X>=0 && Y>=0 && X<cw && Y<ch){ const q = Y*cw+X; if (dil[q] && lab[q] < 0){ lab[q] = comps.length; st.push(q); } } } }
+    const area = (x1 - x0 + 1) * (y1 - y0 + 1);
+    comps.push({ core, score: core * Math.min(1, 2.5 * core / area), x0, y0, x1, y1 });
+  }
+  if (window.__cells) window.__cells.push({ cw, ch, cell: Array.from(cell), w, h, st: window.__cellStat });
+  const k = (img.naturalWidth || img.width) / w;
+  return comps.filter(c => c.core >= 4 && (c.x1 - c.x0 + 1) * (c.y1 - c.y0 + 1) < cw * ch * 0.5)
+    .sort((a, b) => b.score - a.score).slice(0, 2)
+    .map(c => { const pw = (c.x1 - c.x0 + 1) * C, ph = (c.y1 - c.y0 + 1) * C, m = 0.18 * Math.max(pw, ph) + 2 * C;
+      return { x: Math.max(0, (c.x0*C - m) * k), y: Math.max(0, (c.y0*C - m) * k), w: (pw + 2*m) * k, h: (ph + 2*m) * k }; });
+}
+
+// Find sticker-like areas: blocks with lots of sharp dark-on-light strokes (printed text / barcode).
+function findLabelsEdge(img){
   const sm = scaled(img, 640), G = grayOf(sm), { w, h, gr } = G, C = 8;
   const cw = Math.floor(w / C), ch = Math.floor(h / C), cell = new Uint8Array(cw * ch);
   for (let cy = 0; cy < ch; cy++) for (let cx = 0; cx < cw; cx++){
@@ -558,7 +606,38 @@ async function ocr(w, canvas, psm){
 
 // How believable is a result: real dates with times and a readable product name.
 function quality(r){
-  return Math.min(3, r.dates) * 3 + Math.min(3, r.timed) * 2 + r.nameScore * 2 + r.conf / 40;
+  return Math.min(3, r.full) * 4 + Math.min(3, r.timed) * 2 + Math.min(3, r.dates) + r.nameScore * 1.5 + r.conf / 50 - (r.incomplete ? 6 : 0);
+}
+
+// Let Tesseract itself find the date lines on the whole photo: digit-heavy words cluster on the sticker.
+// The sticker is around them: the name sits above the dates.
+async function findByDigits(w, big){
+  const c = scaled(big, 2000), G = grayOf(c);
+  const bin = binToCanvas(binarize(G, Math.round(c.width / 12), 0.15, 0), c.width, c.height);
+  await w.setParameters({ tessedit_pageseg_mode: "11" });
+  const { data } = await w.recognize(bin, {}, { blocks: true, text: true });
+  const words = [];
+  for (const b of data.blocks || []) for (const p of b.paragraphs) for (const l of p.lines) for (const wd of l.words){
+    const d = (wd.text.match(/\d/g) || []).length;
+    if (d >= 2 && d >= wd.text.replace(/[\s.,:;]/g, "").length * 0.6) words.push({ ...wd.bbox, d, hgt: wd.bbox.y1 - wd.bbox.y0 });
+  }
+  if (!words.length) return [];
+  const out = [], used = new Set();
+  // greedy clusters: start from the word with most digit-neighbours nearby
+  const near = (a, b) => { const H = Math.max(a.hgt, b.hgt, 10); return Math.abs((a.y0 + a.y1) / 2 - (b.y0 + b.y1) / 2) < H * 4 && Math.abs((a.x0 + a.x1) / 2 - (b.x0 + b.x1) / 2) < H * 14; };
+  const order = words.map((a, i) => ({ i, n: words.reduce((s, b) => s + (near(a, b) ? b.d : 0), 0) })).sort((a, b) => b.n - a.n);
+  for (const { i } of order){
+    if (used.has(i) || out.length >= 2) continue;
+    const cl = words.filter((b, j) => !used.has(j) && near(words[i], b)); words.forEach((b, j) => { if (cl.includes(b)) used.add(j); });
+    const digits = cl.reduce((s, b) => s + b.d, 0); if (digits < 4) continue;
+    let x0 = Math.min(...cl.map(b => b.x0)), y0 = Math.min(...cl.map(b => b.y0)), x1 = Math.max(...cl.map(b => b.x1)), y1 = Math.max(...cl.map(b => b.y1));
+    const H = Math.max(14, cl.map(b => b.hgt).sort((a, b) => a - b)[cl.length >> 1]), Wd = Math.max(x1 - x0, H * 8);
+    // text may be upside down, so leave room on both sides vertically; names are usually wider than dates
+    x0 -= Wd * 0.45; x1 += Wd * 0.75; y0 -= H * 5; y1 += H * 5;
+    const k = (big.width) / c.width;
+    out.push({ x: Math.max(0, x0 * k), y: Math.max(0, y0 * k), w: (x1 - x0) * k, h: (y1 - y0) * k });
+  }
+  return out;
 }
 
 async function recognizeFile(w, file){
@@ -572,8 +651,14 @@ async function recognizeFile(w, file){
     if (!best || r.q > best.q) best = r;
     return r;
   };
-  const good = () => best && best.timed >= 2 && best.nameScore >= 1;
-  for (const box of findLabels(big)){
+  const good = () => best && best.timed >= 2 && best.nameScore >= 1 && !best.incomplete;
+  const boxes = await findByDigits(w, big);
+  for (const b of findLabels(big)) boxes.push(b);
+  for (const b of findLabelsEdge(big)){ // second opinion from the plain edge detector, if it points elsewhere
+    const ov = boxes.some(a => { const ix = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)), iy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y)); return ix * iy > 0.5 * Math.min(a.w * a.h, b.w * b.h); });
+    if (!ov) boxes.push(b);
+  }
+  for (const box of boxes.slice(0, 5)){
     const p = prepCrop(big, box);
     await tryOne(p.canvas, 6);
     if (good()) break;
@@ -600,6 +685,12 @@ function fixDigits(s){
     .replace(/(?<=\d)[В]|[В](?=\d)/g, "8")
     .replace(/(?<=\d)[Ч]|[Ч](?=\d)/g, "4");
 }
+// typical misreads of the first digit: "94.11" → 04.11, "71" month → 11
+function fixDM(x){
+  if (x.dd > 31 && x.dd % 10 >= 1) x.dd = x.dd % 10;
+  if (x.mm > 12){ const u = x.mm % 10; x.mm = u <= 2 ? 10 + u : u; }
+  return x;
+}
 function findDates(text){
   const t = fixDigits(text);
   const out = [];
@@ -607,7 +698,7 @@ function findDates(text){
   const re = /(?<!\d)(\d{1,2})\s?[.,\/-]\s?(\d{1,2})(?:\s?[.,\/-]\s?(\d{4}|\d{2}))?(?:[^\d\n]{0,5}?(\d{1,2})\s?[:.;,]\s?(\d{2})(?!\d)|[^\d\n]{1,5}(\d{2})(\d{2})(?!\d))?/g;
   let m;
   while ((m = re.exec(t))){
-    const dd = +m[1], mm = +m[2];
+    const fx = m[3] ? fixDM({ dd: +m[1], mm: +m[2] }) : { dd: +m[1], mm: +m[2] }, dd = fx.dd, mm = fx.mm;
     if (dd < 1 || dd > 31 || mm < 1 || mm > 12) continue;
     if (m[2].length < 2 && !m[3] && m[4] == null && m[6] == null) continue; // "1,5 кг" is not a date
     let hh = m[4] != null ? +m[4] : m[6] != null ? +m[6] : null, mi = m[5] != null ? +m[5] : m[7] != null ? +m[7] : null;
@@ -645,7 +736,7 @@ function findDates(text){
       else if (dg.length === 6 && yearish(dg.slice(4))) x = { dd: f(0,2), mm: f(2,4), yy: f(4,6), hh: null, mi: null };
     }
     if (!x) continue;
-    fixT(x); if (!okD(x)) continue;
+    fixDM(x); fixT(x); if (!okD(x)) continue;
     // time printed on the next line
     if (x.hh == null && lines[li + 1]){ const m2 = /^\D{0,3}(\d{1,2})\D{1,3}(\d{2})\D{0,3}$/.exec(lines[li + 1]); if (m2 && +m2[1] <= 23 && +m2[2] <= 59){ x.hh = +m2[1]; x.mi = +m2[2]; } }
     for (const h of have) out.splice(out.indexOf(h), 1);
@@ -704,9 +795,9 @@ function parseLabel(text){
   const ds = findDates(text);
   // keep only dates near today (labels in a kitchen live for days, not months)
   const n = Date.now();
-  let near = ds.filter(x => Math.abs(toDate(x) - n) < 120 * 864e5);
+  let near = ds.filter(x => Math.abs(toDate(x) - n) < 60 * 864e5);
   if (!near.length) near = ds;
-  let exp = null, note = "";
+  let exp = null, note = ""; // exp may be adjusted below
   const kw = /(годен|годн[оа]?|использ\w*|употреб\w*|срок\s*годн\w*|реализ\w*)\s*(до)?/ig;
   const t = fixDigits(text); let m, byKw = null;
   while ((m = kw.exec(t))){ const after = near.find(x => x.idx >= m.index); if (after) byKw = after; }
@@ -716,12 +807,39 @@ function parseLabel(text){
   const pool = timed.length >= 2 ? timed : near; // stray numbers without time are usually noise
   if (byKw) exp = byKw;
   else if (pool.length) exp = pool.reduce((a, b) => toDate(b) > toDate(a) || (+toDate(b) === +toDate(a) && b.hh != null) ? b : a); // the latest date is the expiry
+  // Safety: the expiry is the LAST date printed on the sticker. If the label shows more date lines than we could read,
+  // the unread one may be the expiry — never fall back to the made/defrost date (that would look "expired").
+  // date lines: anything that looks like a date, plus digit-heavy lines printed after the first date (misread dates)
+  const isDateish = l => /\d{1,2}\s?[.,]\s?\d{1,2}\s?[.,]\s?\d{2}/.test(l) || ((l.match(/\d/g) || []).length >= 6 && (l.match(/[А-Яа-яЁё]/g) || []).length <= 4);
+  const first = lines.findIndex(isDateish);
+  const dl = first < 0 ? [] : lines.filter((l, i) => i >= first && (isDateish(l) || (!/\(/.test(l) && (l.match(/\d/g) || []).length >= 3 && (l.match(/[А-Яа-яЁё]/g) || []).length <= 4)));
+  const dateLines = dl.length;
+  const uniq = new Set(near.map(x => `${x.dd}.${x.mm}.${x.hh}`)).size;
+  let incomplete = false;
+  if (exp && dateLines > uniq){
+    // some date line is unreadable: trust the expiry only if the last date line itself was read and gives that date
+    const lastD = findDates(dl[dl.length - 1]).filter(x => x.hh != null);
+    incomplete = !lastD.some(x => +toDate(x) === +toDate(exp));
+  }
   const others = near.filter(x => x !== exp).sort((a, b) => toDate(a) - toDate(b));
-  if (others.length >= 2) note = `Достали ${short(others[0])}, разморозка ${short(others[1])}`;
-  else if (others.length === 1) note = `Изготовлено/вскрыто ${short(others[0])}`;
+  // thermal font: 1 and 7 look alike. Minutes usually match between the dates on one sticker (18:11 → 12:11).
+  if (exp && exp.mi != null){
+    const mins = new Set(others.filter(o => o.mi != null).map(o => o.mi));
+    if (mins.size && !mins.has(exp.mi)){
+      const s2 = pad(exp.mi);
+      for (const v of [s2[0] + (s2[1] === "7" ? "1" : s2[1] === "1" ? "7" : s2[1]), (s2[0] === "1" ? "7" : s2[0] === "7" ? "1" : s2[0]) + s2[1]])
+        if (+v <= 59 && mins.has(+v)){ exp = { ...exp, mi: +v }; break; }
+    }
+  }
+  // three dates = taken out / defrosted by / expires (the last one is the real expiry)
+  if (others.length >= 2){
+    note = `Достали ${short(others[0])} · разморозится ${short(others[1])}`;
+    if (toDate(others[1]) > new Date()) note += " (ещё размораживается)";
+  }
+  else if (others.length === 1) note = dateLines >= 3 ? `Достали ${short(others[0])}` : `Изготовлено/вскрыто ${short(others[0])}`;
   if (exp && exp.hh == null) note += (note ? " · " : "") + "время не найдено";
   return { name, nameScore, expires: exp ? iso(toDate(exp)) : "", note: note.trim(), raw: lines.join(" / "),
-           dates: near.length, timed: near.filter(x => x.hh != null).length };
+           dates: near.length, timed: near.filter(x => x.hh != null).length, full: near.filter(x => x.hh != null && x.yy != null).length, incomplete, dateLines };
 }
 
 // ---- remembered product names (learned from your corrections) ----
@@ -775,7 +893,10 @@ async function pump(){
         const r = await recognizeFile(w, it.file);
         it.name = r.name; it.expires = r.expires; it.raw = r.raw.slice(0, 200);
         it.note = r.note || (r.expires ? "" : "Срок не найден: " + r.raw.slice(0, 80));
-        if (r.expires && r.timed === 0){
+        if (r.expires && r.incomplete){
+          const d = parseExp(r.expires); it.expires = ""; it.guess = r.expires;
+          it.note = `Прочитаны не все даты (возможно, срок ${fmtDate(d)}) — проверьте по фото`;
+        } else if (r.expires && r.timed === 0){
           // labels always print a time: without one the read is unreliable → ask the user, keep the guess as a hint
           const d = parseExp(r.expires); it.expires = ""; it.guess = r.expires;
           it.note = `Плохо читается, возможно ${fmtDate(d)} — проверьте по фото`;
