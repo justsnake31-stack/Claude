@@ -1,0 +1,656 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Сравнение распознавания</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<style>
+:root{--bg:#f3f5f4;--surface:#fff;--fg:#17201d;--muted:#5d6b66;--line:#dfe5e2;--accent:#0f7a5c;--good:#2f6f4f;--good-bg:#e8f4ee;--bad:#b42318;--bad-bg:#fdecea}
+@media (prefers-color-scheme:dark){:root{--bg:#111816;--surface:#19221f;--fg:#e7eeeb;--muted:#97a7a1;--line:#2a3632;--accent:#3cc497;--good:#7fd3a8;--good-bg:#16302a;--bad:#ff7b70;--bad-bg:#3b1a18;color-scheme:dark}}
+*{box-sizing:border-box}[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,sans-serif;
+  padding:max(16px,env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:900px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+h1{font-size:22px;margin:0}p{margin:0;color:var(--muted)}
+.btn{font:inherit;font-weight:600;border-radius:10px;border:1px solid var(--accent);background:var(--accent);color:#fff;padding:12px 16px;display:inline-block;cursor:pointer}
+input[type=file]{position:absolute;width:1px;height:1px;opacity:0}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:10px}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:520px){.cols{grid-template-columns:1fr}}
+.col{border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.col h3{margin:0;font-size:14px}
+.col img{width:100%;border-radius:6px;border:1px solid var(--line);background:#fff}
+.k{font-size:13px;color:var(--muted)}
+.v{font-weight:600;overflow-wrap:anywhere}
+.win{background:var(--good-bg);color:var(--good)}
+.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;white-space:pre-wrap;color:var(--muted);max-height:140px;overflow:auto}
+.thumb{max-height:160px;max-width:100%;border-radius:8px;align-self:flex-start}
+.tot{display:flex;gap:10px;flex-wrap:wrap}
+.tot span{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+details summary{cursor:pointer;color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Сравнение: A (сейчас) и Б (по границам наклейки)</h1>
+  <p><b>A</b> — как в приложении: ищет текст, выравнивает, чёрно-белая очистка. <b>Б</b> — находит белую наклейку по краям, вырезает её по контуру и читает обычное серое изображение. Приложение это не меняет.</p>
+  <div><label class="btn" for="f">Выбрать фото для теста</label><input type="file" id="f" accept="image/*" multiple></div>
+  <p id="st"></p>
+  <div class="tot" id="tot" hidden></div>
+  <div id="out" style="display:flex;flex-direction:column;gap:14px"></div>
+</div>
+<script>
+(() => {
+const $ = id => document.getElementById(id);
+const pad = n => String(n).padStart(2,"0");
+const ymd = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+const fmtDate = d => `${pad(d.getDate())}.${pad(d.getMonth()+1)}`;
+const fmtTime = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const parseExp = s => { if (!s) return null; const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{1,2}):(\d{2}))?/.exec(s); if(!m) return null; return new Date(+m[1],+m[2]-1,+m[3], m[4]!=null?+m[4]:23, m[5]!=null?+m[5]:59); };
+const WHITELIST = "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя0123456789.,:;/-+()\"«»№ ";
+
+// ---------- image helpers ----------
+async function loadBitmap(file){
+  if (window.createImageBitmap){
+    try { return await createImageBitmap(file, { imageOrientation: "from-image" }); } catch(e){}
+    try { return await createImageBitmap(file); } catch(e){}
+  }
+  return await new Promise((res, rej) => { const u = URL.createObjectURL(file); const im = new Image(); im.onload = () => { URL.revokeObjectURL(u); res(im); }; im.onerror = () => { URL.revokeObjectURL(u); rej(new Error("img")); }; im.src = u; });
+}
+const mkCanvas = (w, h) => { const c = document.createElement("canvas"); c.width = Math.max(1, Math.round(w)); c.height = Math.max(1, Math.round(h)); return c; };
+const ctx2d = c => c.getContext("2d", { willReadFrequently: true });
+function scaled(src, maxSide){
+  const W = src.naturalWidth || src.width, H = src.naturalHeight || src.height, k = Math.min(1, maxSide / Math.max(W, H));
+  const c = mkCanvas(W * k, H * k), g = ctx2d(c); g.imageSmoothingQuality = "high"; g.drawImage(src, 0, 0, c.width, c.height); return c;
+}
+function grayOf(c){
+  const d = ctx2d(c).getImageData(0, 0, c.width, c.height).data, n = c.width * c.height, gr = new Uint8Array(n), sat = new Uint8Array(n);
+  for (let i = 0, j = 0; i < n; i++, j += 4){
+    const r = d[j], g = d[j+1], b = d[j+2];
+    gr[i] = (r * 77 + g * 150 + b * 29) >> 8;
+    sat[i] = Math.max(r, g, b) - Math.min(r, g, b);
+  }
+  return { w: c.width, h: c.height, gr, sat };
+}
+// Bradley local threshold: copes with glare and shadows on the sticker
+function binarize(G, win, t, paperK = 0.7){
+  const { w, h, gr } = G, I = new Float64Array((w + 1) * (h + 1)), out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++){ let row = 0; for (let x = 0; x < w; x++){ row += gr[y*w+x]; I[(y+1)*(w+1)+x+1] = I[y*(w+1)+x+1] + row; } }
+  const s = Math.max(4, win >> 1);
+  // brightness of the sticker paper: 92th percentile; areas much darker than it are not paper
+  const hist = new Uint32Array(256); for (let i = 0; i < gr.length; i += 3) hist[gr[i]]++;
+  let acc = 0, p92 = 255; const lim = gr.length / 3 * 0.92; for (let v = 0; v < 256; v++){ acc += hist[v]; if (acc >= lim){ p92 = v; break; } }
+  const paper = paperK ? p92 * paperK : 0;
+  for (let y = 0; y < h; y++){
+    const y0 = Math.max(0, y - s), y1 = Math.min(h, y + s + 1);
+    for (let x = 0; x < w; x++){
+      const x0 = Math.max(0, x - s), x1 = Math.min(w, x + s + 1);
+      const sum = I[y1*(w+1)+x1] - I[y0*(w+1)+x1] - I[y1*(w+1)+x0] + I[y0*(w+1)+x0];
+      const area = (x1 - x0) * (y1 - y0);
+      // ink = darker than its surroundings AND the surroundings are paper-bright (drops background clutter)
+      out[y*w+x] = gr[y*w+x] * area < sum * (1 - t) && sum > paper * area ? 0 : 255; // 0 = ink
+    }
+  }
+  return out;
+}
+function binToCanvas(bin, w, h){
+  const c = mkCanvas(w, h), g = ctx2d(c), im = g.createImageData(w, h), d = im.data;
+  for (let i = 0, j = 0; i < bin.length; i++, j += 4){ d[j] = d[j+1] = d[j+2] = bin[i]; d[j+3] = 255; }
+  g.putImageData(im, 0, 0); return c;
+}
+// rotate around the centre, keep everything, fill with white
+function rotated(src, deg, scale = 1){
+  const a = deg * Math.PI / 180, cs = Math.abs(Math.cos(a)), sn = Math.abs(Math.sin(a));
+  const w = src.width * scale, h = src.height * scale;
+  const c = mkCanvas(w * cs + h * sn, w * sn + h * cs), g = ctx2d(c);
+  g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.imageSmoothingQuality = "high";
+  g.translate(c.width / 2, c.height / 2); g.rotate(a); g.drawImage(src, -w / 2, -h / 2, w, h); return c;
+}
+
+// Find sticker-like areas: blocks with lots of sharp dark-on-light strokes (printed text / barcode).
+function findLabels(img){
+  const sm = scaled(img, 640), G = grayOf(sm), { w, h, gr } = G, C = 8;
+  const cw = Math.floor(w / C), ch = Math.floor(h / C), cell = new Uint8Array(cw * ch);
+  for (let cy = 0; cy < ch; cy++) for (let cx = 0; cx < cw; cx++){
+    let edges = 0, mx = 0, sum = 0;
+    for (let y = cy*C; y < cy*C + C; y++) for (let x = cx*C; x < cx*C + C; x++){
+      const i = y*w + x, v = gr[i]; sum += v; if (v > mx) mx = v;
+      if (x + 1 < w && y + 1 < h && Math.abs(v - gr[i+1]) + Math.abs(v - gr[i+w]) > 40) edges++;
+    }
+    cell[cy*cw + cx] = edges >= 7 && mx > 140 && sum / (C*C) > 70 ? 1 : 0;
+  }
+  // close small gaps between text lines, then connected components
+  const dil = new Uint8Array(cw * ch);
+  for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) if (cell[y*cw+x])
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++){ const X = x+dx, Y = y+dy; if (X>=0 && Y>=0 && X<cw && Y<ch) dil[Y*cw+X] = 1; }
+  const lab = new Int32Array(cw * ch).fill(-1), comps = [];
+  for (let i = 0; i < dil.length; i++) if (dil[i] && lab[i] < 0){
+    const st = [i]; lab[i] = comps.length; let n = 0, core = 0, x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
+    while (st.length){ const k = st.pop(), x = k % cw, y = (k / cw) | 0; n++; core += cell[k];
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]){ const X = x+dx, Y = y+dy; if (X>=0 && Y>=0 && X<cw && Y<ch){ const q = Y*cw+X; if (dil[q] && lab[q] < 0){ lab[q] = comps.length; st.push(q); } } } }
+    const area = (x1 - x0 + 1) * (y1 - y0 + 1);
+    comps.push({ core, score: core * Math.min(1, 2 * core / area), x0, y0, x1, y1 });
+  }
+  const k = (img.naturalWidth || img.width) / w;
+  return comps.filter(c => c.core >= 5 && (c.x1 - c.x0 + 1) * (c.y1 - c.y0 + 1) < cw * ch * 0.6)
+    .sort((a, b) => b.score - a.score).slice(0, 2)
+    .map(c => { const pw = (c.x1 - c.x0 + 1) * C, ph = (c.y1 - c.y0 + 1) * C, m = 0.08 * Math.max(pw, ph) + 6;
+      return { x: Math.max(0, (c.x0*C - m) * k), y: Math.max(0, (c.y0*C - m) * k), w: (pw + 2*m) * k, h: (ph + 2*m) * k }; });
+}
+
+// Keep only letter-sized ink blobs (drops container edges, shadows, specks). Returns filtered binary + text bbox.
+function letters(bin, w, h){
+  const lab = new Int32Array(w * h).fill(-1), keep = new Uint8Array(w * h).fill(255), st = [];
+  let bx0 = w, by0 = h, bx1 = -1, by1 = -1, n = 0; const hs = [];
+  for (let i = 0; i < bin.length; i++){
+    if (bin[i] || lab[i] >= 0) continue;
+    const px = []; st.push(i); lab[i] = i; let x0 = w, y0 = h, x1 = -1, y1 = -1;
+    while (st.length){ const k = st.pop(), x = k % w, y = (k / w) | 0; px.push(k);
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++){ const X = x+dx, Y = y+dy;
+        if (X >= 0 && Y >= 0 && X < w && Y < h){ const q = Y*w+X; if (!bin[q] && lab[q] < 0){ lab[q] = i; st.push(q); } } } }
+    const cw = x1 - x0 + 1, chh = y1 - y0 + 1, fill = px.length / (cw * chh);
+    if (chh >= Math.max(3, h * 0.012) && chh <= h * 0.2 && cw <= w * 0.25 && cw <= chh * 6 && fill > 0.08 && fill < 0.95 && x0 > 0 && y0 > 0 && x1 < w - 1 && y1 < h - 1){
+      for (const k of px) keep[k] = 0; n++; hs.push(chh);
+      if (x0 < bx0) bx0 = x0; if (y0 < by0) by0 = y0; if (x1 > bx1) bx1 = x1; if (y1 > by1) by1 = y1;
+    }
+  }
+  hs.sort((a, b) => a - b);
+  return { bin: keep, n, medH: hs.length ? hs[hs.length >> 1] : 0, box: n ? { x0: bx0, y0: by0, x1: bx1, y1: by1 } : null };
+}
+// The main block of text: letters glued together by smearing ~1 letter wide / half a letter tall; keep the heaviest block.
+function mainBlock(L, w, h){
+  const rx = Math.max(2, Math.round(L.medH * 1.2)), ry = Math.max(1, Math.round(L.medH * 0.6));
+  // horizontal then vertical dilation via running sums
+  const a = new Uint8Array(w * h), b = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++){ let run = 0; for (let x = -rx; x < w; x++){ if (x + rx < w && !L.bin[y*w+x+rx]) run++; if (x - rx - 1 >= 0 && !L.bin[y*w+x-rx-1]) run--; if (x >= 0) a[y*w+x] = run > 0 ? 1 : 0; } }
+  for (let x = 0; x < w; x++){ let run = 0; for (let y = -ry; y < h; y++){ if (y + ry < h && a[(y+ry)*w+x]) run++; if (y - ry - 1 >= 0 && a[(y-ry-1)*w+x]) run--; if (y >= 0) b[y*w+x] = run > 0 ? 1 : 0; } }
+  const lab = new Int32Array(w * h).fill(-1), mass = [], boxes = [], st = [];
+  for (let i = 0; i < b.length; i++) if (b[i] && lab[i] < 0){
+    const id = mass.length; let m = 0, x0 = w, y0 = h, x1 = -1, y1 = -1; st.push(i); lab[i] = id;
+    while (st.length){ const k = st.pop(), x = k % w, y = (k / w) | 0; if (!L.bin[k]) m++;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      for (const q of [k - 1, k + 1, k - w, k + w]) if (q >= 0 && q < b.length && b[q] && lab[q] < 0 && Math.abs((q % w) - x) <= 1){ lab[q] = id; st.push(q); } }
+    mass.push(m); boxes.push({ x0, y0, x1, y1 });
+  }
+  if (!mass.length) return null;
+  let best = 0; mass.forEach((m, i) => { if (m > mass[best]) best = i; });
+  const out = new Uint8Array(w * h).fill(255);
+  for (let i = 0; i < out.length; i++) if (!L.bin[i] && lab[i] === best) out[i] = 0;
+  return { bin: out, box: boxes[best] };
+}
+
+// Straighten: the angle at which rows of ink give the sharpest horizontal profile (text lines).
+function skewAngle(bin, w, h){
+  const pts = []; const step = Math.max(1, Math.round(Math.sqrt(w * h / 60000)));
+  for (let y = 0; y < h; y += step) for (let x = 0; x < w; x += step) if (!bin[y*w+x]) pts.push(x - w/2, y - h/2);
+  if (pts.length < 40) return 0;
+  const R = Math.ceil(Math.hypot(w, h)) + 2, bins = new Float64Array(2 * R);
+  const score = deg => { const a = deg * Math.PI / 180, s = Math.sin(a), c = Math.cos(a); bins.fill(0);
+    for (let i = 0; i < pts.length; i += 2) bins[(R + (-pts[i] * s + pts[i+1] * c) / step) | 0]++;
+    let v = 0; for (let i = 0; i < bins.length; i++) v += bins[i] * bins[i]; return v; };
+  let best = 0, bv = -1;
+  for (let d = -88; d <= 90; d += 3){ const v = score(d); if (v > bv){ bv = v; best = d; } }
+  for (let d = best - 2.5; d <= best + 2.5; d += 0.5){ const v = score(d); if (v > bv){ bv = v; best = d; } }
+  return best;
+}
+
+// Crop → straighten → enlarge so letters are big enough → clean binary image ready for OCR
+function prepCrop(img, box){
+  const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
+  const bw = Math.min(box.w, W - box.x), bh = Math.min(box.h, H - box.y);
+  const k = Math.min(3, 1400 / Math.max(bw, bh));   // normalise: same working size for any camera
+  const c = mkCanvas(bw * k, bh * k); const g = ctx2d(c); g.imageSmoothingQuality = "high";
+  g.drawImage(img, box.x, box.y, bw, bh, 0, 0, c.width, c.height);
+  // estimate skew on a small copy, using letters only
+  const sm = scaled(c, 600), sg = grayOf(sm), sb = binarize(sg, Math.round(sm.width / 10), 0.18, 0);
+  const L = letters(sb, sm.width, sm.height);
+  const ang = L.n >= 8 ? skewAngle(L.bin, sm.width, sm.height) : skewAngle(sb, sm.width, sm.height);
+  const G = grayOf(c);
+  const binArr = binarize(G, Math.round(Math.max(c.width, c.height) / 14), 0.16, 0);
+  const bin = binToCanvas(binArr, c.width, c.height);
+  // contrast-stretched grayscale: better than black/white for blurry shots
+  const hist = new Uint32Array(256); for (const v of G.gr) hist[v]++;
+  let lo = 0, hi = 255, acc = 0; const n = G.gr.length;
+  for (let v = 0; v < 256; v++){ acc += hist[v]; if (acc < n * 0.02) lo = v; if (acc < n * 0.97) hi = v; }
+  const g2 = ctx2d(c), im = g2.getImageData(0, 0, c.width, c.height), d = im.data, sc = 255 / Math.max(20, hi - lo);
+  for (let i = 0, j = 0; i < n; i++, j += 4){ const v = Math.max(0, Math.min(255, (G.gr[i] - lo) * sc)); d[j] = d[j+1] = d[j+2] = v; }
+  g2.putImageData(im, 0, 0);
+  // rotate both, then cut to the area that holds letters (drops container edges around the sticker)
+  let rb = Math.abs(ang) < 0.5 ? bin : rotated(bin, -ang), rg = Math.abs(ang) < 0.5 ? c : rotated(c, -ang);
+  const s2 = scaled(rb, 700), g3 = grayOf(s2), b3 = new Uint8Array(g3.gr.length);
+  for (let i = 0; i < b3.length; i++) b3[i] = g3.gr[i] < 128 ? 0 : 255;
+  const L2 = letters(b3, s2.width, s2.height);
+  if (L2.n >= 6){
+    const MB = mainBlock(L2, s2.width, s2.height);
+    if (MB){
+      const f = rb.width / s2.width, m = Math.max(L2.medH * 0.8, 4) * f;
+      const x0 = Math.max(0, MB.box.x0 * f - m), y0 = Math.max(0, MB.box.y0 * f - m);
+      const x1 = Math.min(rb.width, (MB.box.x1 + 1) * f + m), y1 = Math.min(rb.height, (MB.box.y1 + 1) * f + m);
+      const cut = src => { const o = mkCanvas(x1 - x0, y1 - y0), og = ctx2d(o); og.fillStyle = "#fff"; og.fillRect(0, 0, o.width, o.height); og.drawImage(src, x0, y0, x1 - x0, y1 - y0, 0, 0, o.width, o.height); return o; };
+      // binary version: keep only letters of the main block (full resolution)
+      const gg = grayOf(rb), full = new Uint8Array(gg.gr.length);
+      for (let i = 0; i < full.length; i++){ const x = i % rb.width, y = (i / rb.width) | 0;
+        full[i] = gg.gr[i] < 128 && x >= x0 && x < x1 && y >= y0 && y < y1 ? 0 : 255; }
+      const LF = letters(full, rb.width, rb.height);
+      rb = cut(binToCanvas(LF.n >= 6 ? LF.bin : full, rb.width, rb.height)); rg = cut(rg);
+    }
+  }
+  return { canvas: rb, gray: rg, angle: ang };
+}
+function wholePhoto(img){
+  const c = scaled(img, 2000), G = grayOf(c);
+  return binToCanvas(binarize(G, Math.round(c.width / 12), 0.16, 0), c.width, c.height);
+}
+
+async function ocr(w, canvas, psm){
+  await w.setParameters({ tessedit_pageseg_mode: String(psm) });
+  const { data } = await w.recognize(canvas);
+  return { text: data.text || "", conf: data.confidence || 0 };
+}
+
+// How believable is a result: real dates with times and a readable product name.
+function quality(r){
+  return Math.min(3, r.dates) * 3 + Math.min(3, r.timed) * 2 + r.nameScore * 2 + r.conf / 40;
+}
+
+async function recognizeFile(w, file){
+  const img = await loadBitmap(file);
+  const big = scaled(img, 3000); img.close && img.close();
+  let best = null;
+  const tryOne = async (canvas, psm) => {
+    const o = await ocr(w, canvas, psm), r = parseLabel(o.text);
+    r.conf = o.conf; r.q = quality(r);
+    if (window.__ocrLog) window.__ocrLog.push({ psm, q: +r.q.toFixed(1), conf: Math.round(o.conf), text: o.text });
+    if (!best || r.q > best.q){ best = r; best.preview = canvas.toDataURL("image/jpeg", 0.8); }
+    return r;
+  };
+  const good = () => best && best.timed >= 2 && best.nameScore >= 1;
+  for (const box of findLabels(big)){
+    const p = prepCrop(big, box);
+    await tryOne(p.canvas, 6);
+    if (good()) break;
+    await tryOne(p.gray, 6);                         // blurry photo: grayscale reads better
+    if (good()) break;
+    await tryOne(rotated(p.canvas, 180), 6);       // label may be upside down
+    if (good()) break;
+    await tryOne(p.canvas, 11);                      // sparse text mode
+    if (good()) break;
+  }
+  if (!good()) await tryOne(wholePhoto(big), 11);
+  big.width = big.height = 0; // free memory early on iPhone
+  return best;
+}
+
+// ---- parsing the label text ----
+function fixDigits(s){
+  // typical OCR confusions next to numbers
+  return s
+    .replace(/[OoОо](?=\d)|(?<=\d)[OoОо]/g, "0")
+    .replace(/(?<=\d)[lI|!]|[lI|!](?=\d)/g, "1")
+    .replace(/(?<=\d)[ЗзZ]|[ЗзZ](?=\d)/g, "3")
+    .replace(/(?<=\d)[Бб]|[Бб](?=\d)/g, "6")
+    .replace(/(?<=\d)[В]|[В](?=\d)/g, "8")
+    .replace(/(?<=\d)[Ч]|[Ч](?=\d)/g, "4");
+}
+function findDates(text){
+  const t = fixDigits(text);
+  const out = [];
+  // dd.mm[.yy|.yyyy] [hh:mm] — separators . , / - and OCR'd spaces
+  const re = /(?<!\d)(\d{1,2})\s?[.,\/-]\s?(\d{1,2})(?:\s?[.,\/-]\s?(\d{4}|\d{2}))?(?:[^\d\n]{0,5}?(\d{1,2})\s?[:.;,]\s?(\d{2})(?!\d)|[^\d\n]{1,5}(\d{2})(\d{2})(?!\d))?/g;
+  let m;
+  while ((m = re.exec(t))){
+    const dd = +m[1], mm = +m[2];
+    if (dd < 1 || dd > 31 || mm < 1 || mm > 12) continue;
+    if (m[2].length < 2 && !m[3] && m[4] == null && m[6] == null) continue; // "1,5 кг" is not a date
+    let hh = m[4] != null ? +m[4] : m[6] != null ? +m[6] : null, mi = m[5] != null ? +m[5] : m[7] != null ? +m[7] : null;
+    if (hh != null && (hh > 23 || mi > 59)){ hh = null; mi = null; }
+    let yy = m[3] ? +m[3] : null; if (yy != null && yy < 100) yy += 2000;
+    if (yy != null && Math.abs(yy - new Date().getFullYear()) > 1) yy = null; // misread year → guess
+    out.push({ dd, mm, yy, hh, mi, idx: m.index, len: m[0].length });
+  }
+  // Blurry photos often lose the dots/colons: "01 11 26 19 43". A label line with only digits is one date+time.
+  const Y = new Date().getFullYear() % 100;
+  const okD = x => x.dd >= 1 && x.dd <= 31 && x.mm >= 1 && x.mm <= 12;
+  const fixT = x => { if (x.hh == null || x.mi == null || x.hh > 23 || x.mi > 59){ x.hh = null; x.mi = null; } if (x.yy != null){ if (x.yy < 100) x.yy += 2000; if (Math.abs(x.yy - 2000 - Y) > 1) x.yy = null; } return x; };
+  const lines = t.split("\n"); let pos = 0;
+  for (let li = 0; li < lines.length; li++){
+    const start = pos; pos += lines[li].length + 1;
+    if ((lines[li].match(/[А-Яа-яЁё]/g) || []).length > 4) continue;
+    // a line of numbers: letters here are misread digits
+    const line = lines[li].replace(/[OoОо]/g, "0").replace(/[ЗзZ]/g, "3").replace(/[Бб]/g, "6").replace(/[В]/g, "8").replace(/[Ч]/g, "4").replace(/[Il|!]/g, "1");
+    const have = out.filter(x => x.idx >= start && x.idx < pos);
+    if (have.some(x => x.hh != null)) continue;
+    const g = line.match(/\d+/g) || [], dg = g.join("");
+    if (dg.length < 6 || dg.length > 12) continue;
+    let x = null;
+    const yearish = v => (v.length === 2 && Math.abs(+v - Y) <= 1) || (v.length === 4 && Math.abs(+v - 2000 - Y) <= 1);
+    if (g.length >= 3 && g.every(v => v.length <= 4) && g[0].length <= 2 && g[1].length <= 2){
+      // separated groups: dd mm [yy] [hh mm]
+      if (yearish(g[2])) x = { dd: +g[0], mm: +g[1], yy: +g[2], hh: g.length >= 5 && g[3].length === 2 && g[4].length === 2 ? +g[3] : null, mi: g.length >= 5 && g[4].length === 2 ? +g[4] : null };
+      else if (g.length === 4 && g[2].length === 2 && g[3].length === 2) x = { dd: +g[0], mm: +g[1], yy: null, hh: +g[2], mi: +g[3] };
+    }
+    if (!x){
+      const f = (a, b) => +dg.slice(a, b);
+      if (dg.length === 12) x = { dd: f(0,2), mm: f(2,4), yy: f(4,8), hh: f(8,10), mi: f(10,12) };
+      else if (dg.length === 10) x = { dd: f(0,2), mm: f(2,4), yy: f(4,6), hh: f(6,8), mi: f(8,10) };
+      else if (dg.length === 8) x = yearish(dg.slice(4)) ? { dd: f(0,2), mm: f(2,4), yy: f(4,8), hh: null, mi: null } : { dd: f(0,2), mm: f(2,4), yy: null, hh: f(4,6), mi: f(6,8) };
+      else if (dg.length === 6 && yearish(dg.slice(4))) x = { dd: f(0,2), mm: f(2,4), yy: f(4,6), hh: null, mi: null };
+    }
+    if (!x) continue;
+    fixT(x); if (!okD(x)) continue;
+    // time printed on the next line
+    if (x.hh == null && lines[li + 1]){ const m2 = /^\D{0,3}(\d{1,2})\D{1,3}(\d{2})\D{0,3}$/.exec(lines[li + 1]); if (m2 && +m2[1] <= 23 && +m2[2] <= 59){ x.hh = +m2[1]; x.mi = +m2[2]; } }
+    for (const h of have) out.splice(out.indexOf(h), 1);
+    out.push({ ...x, idx: start, len: line.length });
+  }
+  out.sort((a, b) => a.idx - b.idx);
+  return out;
+}
+function toDate(x){
+  const n = new Date();
+  let y = x.yy;
+  if (!y){
+    const cands = [n.getFullYear()-1, n.getFullYear(), n.getFullYear()+1].map(Y => new Date(Y, x.mm-1, x.dd));
+    cands.sort((a,b) => Math.abs(a-n) - Math.abs(b-n)); y = cands[0].getFullYear();
+  }
+  return new Date(y, x.mm-1, x.dd, x.hh ?? 23, x.mi ?? 59);
+}
+const iso = d => `${ymd(d)}T${fmtTime(d)}`;
+const short = x => `${pad(x.dd)}.${pad(x.mm)}${x.hh!=null?" "+pad(x.hh)+":"+pad(x.mi):""}`;
+
+// 0..3: how much a line looks like real Russian words
+function wordScore(line){
+  const words = line.match(/[А-Яа-яЁё]{3,}/g) || [];
+  let good = 0, letters = 0;
+  for (const wd of words){
+    letters += wd.length;
+    const v = (wd.match(/[аеёиоуыэюяАЕЁИОУЫЭЮЯ]/g) || []).length / wd.length;
+    if (v >= 0.2 && v <= 0.7 && !/(.)\1\1/.test(wd)) good++;
+  }
+  const clean = letters / Math.max(1, line.replace(/\s/g, "").length);
+  if (!good) return 0;
+  return Math.min(3, good * clean * (letters >= 6 ? 1.5 : 1));
+}
+function cleanName(l){
+  return l.replace(/\(\s*[+\-]?\s*\d+[^)]*\)?/g, "")     // storage temperature "(+2+4)"
+          .replace(/\([^)]*$/, "")                            // cut-off "( +"
+          .replace(/^[^А-Яа-яЁё"«]+/, "").replace(/^(?:[А-Яа-яЁё]{1,2}\s+)+(?=[А-Яа-яЁё"«]{3})/, "").replace(/[|_~*©®\\]+/g, "")
+          .replace(/чы/g, "цы").replace(/Чы/g, "Цы")                 // "чы" never occurs in Russian: thermal-font ц
+          .replace(/\s{2,}/g, " ").replace(/[\s,.;:\-(]+$/, "").trim();
+}
+
+function parseLabel(text){
+  const lines = text.split(/\n+/).map(s => s.replace(/\s+/g," ").trim()).filter(Boolean);
+  // name: best "wordy" line before the first date line (+ next line if it continues the name, e.g. brand in quotes)
+  let name = "", nameScore = 0, firstDateLine = lines.findIndex(l => findDates(l).length);
+  if (firstDateLine < 0) firstDateLine = lines.length;
+  let bi = -1;
+  lines.forEach((l, i) => { const s = wordScore(l) * (i < firstDateLine ? 1 : 0.5); if (s > nameScore){ nameScore = s; bi = i; } });
+  if (bi >= 0){
+    name = cleanName(lines[bi]);
+    const nx = lines[bi + 1];
+    if (nx && bi + 1 < firstDateLine && wordScore(nx) >= (/^["«]/.test(nx) ? 0.3 : 0.8) && name.length < 30) name = (name + " " + cleanName(nx)).trim();
+    name = rememberedName(name);
+  }
+
+  const ds = findDates(text);
+  // keep only dates near today (labels in a kitchen live for days, not months)
+  const n = Date.now();
+  let near = ds.filter(x => Math.abs(toDate(x) - n) < 120 * 864e5);
+  if (!near.length) near = ds;
+  let exp = null, note = "";
+  const kw = /(годен|годн[оа]?|использ\w*|употреб\w*|срок\s*годн\w*|реализ\w*)\s*(до)?/ig;
+  const t = fixDigits(text); let m, byKw = null;
+  while ((m = kw.exec(t))){ const after = near.find(x => x.idx >= m.index); if (after) byKw = after; }
+  const withYear = near.filter(x => x.yy != null);
+  if (withYear.length >= 2) near = withYear; // labels print full dates; fragments without a year are noise
+  const timed = near.filter(x => x.hh != null);
+  const pool = timed.length >= 2 ? timed : near; // stray numbers without time are usually noise
+  if (byKw) exp = byKw;
+  else if (pool.length) exp = pool.reduce((a, b) => toDate(b) > toDate(a) || (+toDate(b) === +toDate(a) && b.hh != null) ? b : a); // the latest date is the expiry
+  const others = near.filter(x => x !== exp).sort((a, b) => toDate(a) - toDate(b));
+  if (others.length >= 2) note = `Достали ${short(others[0])}, разморозка ${short(others[1])}`;
+  else if (others.length === 1) note = `Изготовлено/вскрыто ${short(others[0])}`;
+  if (exp && exp.hh == null) note += (note ? " · " : "") + "время не найдено";
+  return { name, nameScore, expires: exp ? iso(toDate(exp)) : "", note: note.trim(), raw: lines.join(" / "),
+           dates: near.length, timed: near.filter(x => x.hh != null).length };
+}
+
+// ---- remembered product names (learned from your corrections) ----
+const NAMES = "srok-names-v1";
+let knownNames = []; try { knownNames = JSON.parse(localStorage.getItem(NAMES) || "[]"); } catch(e){}
+function learnName(nm){
+  nm = (nm || "").trim(); if (nm.length < 3) return;
+  knownNames = [nm, ...knownNames.filter(x => x.toLowerCase() !== nm.toLowerCase())].slice(0, 300);
+  try { localStorage.setItem(NAMES, JSON.stringify(knownNames)); } catch(e){}
+  const dl = $("names"); if (dl) dl.replaceChildren(...knownNames.map(v => { const o = document.createElement("option"); o.value = v; return o; }));
+}
+function lev(a, b){
+  const v = Array.from({length: b.length + 1}, (_, i) => i);
+  for (let i = 1; i <= a.length; i++){ let prev = v[0]; v[0] = i;
+    for (let j = 1; j <= b.length; j++){ const tmp = v[j]; v[j] = Math.min(v[j] + 1, v[j-1] + 1, prev + (a[i-1] === b[j-1] ? 0 : 1)); prev = tmp; } }
+  return v[b.length];
+}
+function rememberedName(nm){
+  if (!nm || !knownNames.length) return nm;
+  const a = nm.toLowerCase().replace(/[^а-яё0-9 ]/g, "");
+  let best = null, bs = 0;
+  for (const k of knownNames){
+    const b = k.toLowerCase().replace(/[^а-яё0-9 ]/g, ""); if (!b) continue;
+    // compare with the start of the OCR line too, the label may carry extra words
+    const s = Math.max(1 - lev(a, b) / Math.max(a.length, b.length), 1 - lev(a.slice(0, b.length + 2), b) / Math.max(b.length, 4) - 0.1);
+    if (s > bs){ bs = s; best = k; }
+  }
+  return bs >= 0.55 ? best : nm;
+}
+
+
+// ===== Algorithm B: find the sticker's borders, cut it out along its outline, OCR the plain (grayscale) crop =====
+
+function otsu(gr){
+  const hist = new Float64Array(256); for (const v of gr) hist[v]++;
+  const n = gr.length; let sum = 0; for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let sB = 0, wB = 0, best = 0, T = 128;
+  for (let t = 0; t < 256; t++){ wB += hist[t]; if (!wB) continue; const wF = n - wB; if (!wF) break;
+    sB += t * hist[t]; const mB = sB / wB, mF = (sum - sB) / wF, v = wB * wF * (mB - mF) * (mB - mF); if (v > best){ best = v; T = t; } }
+  return T;
+}
+// box dilation / erosion of a 0/1 mask with radius r (separable running sums)
+function morph(m, w, h, r, dilate){
+  const a = new Uint8Array(w * h), b = new Uint8Array(w * h), want = dilate ? 1 : 0;
+  for (let y = 0; y < h; y++){ let cnt = 0; const row = y * w;
+    for (let x = -r; x < w; x++){ if (x + r < w && m[row + x + r] === want) cnt++; if (x - r - 1 >= 0 && m[row + x - r - 1] === want) cnt--;
+      if (x >= 0) a[row + x] = dilate ? (cnt > 0 ? 1 : 0) : (cnt > 0 ? 0 : 1); } }
+  for (let x = 0; x < w; x++){ let cnt = 0;
+    for (let y = -r; y < h; y++){ if (y + r < h && a[(y + r) * w + x] === want) cnt++; if (y - r - 1 >= 0 && a[(y - r - 1) * w + x] === want) cnt--;
+      if (y >= 0) b[y * w + x] = dilate ? (cnt > 0 ? 1 : 0) : (cnt > 0 ? 0 : 1); } }
+  return b;
+}
+// minimal-area rotated rectangle around points (brute force over angles)
+function minRect(xs, ys){
+  let best = null;
+  for (let d = 0; d < 90; d += 1){
+    const a = d * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+    let u0 = 1e9, u1 = -1e9, v0 = 1e9, v1 = -1e9;
+    for (let i = 0; i < xs.length; i++){ const u = xs[i] * c + ys[i] * s, v = -xs[i] * s + ys[i] * c;
+      if (u < u0) u0 = u; if (u > u1) u1 = u; if (v < v0) v0 = v; if (v > v1) v1 = v; }
+    const area = (u1 - u0) * (v1 - v0);
+    if (!best || area < best.area){ const uc = (u0 + u1) / 2, vc = (v0 + v1) / 2;
+      best = { area, angle: a, w: u1 - u0, h: v1 - v0, cx: uc * c - vc * s, cy: uc * s + vc * c }; }
+  }
+  return best;
+}
+
+// Find white sticker candidates: bright + colourless blobs, closed over the text, rectangular, with ink inside.
+function findStickers(img, rk = 0.012){
+  const sm = scaled(img, 800), G = grayOf(sm), { w, h, gr, sat } = G;
+  const T = Math.max(110, otsu(gr));
+  const raw = new Uint8Array(w * h);
+  for (let i = 0; i < raw.length; i++) raw[i] = gr[i] > T && sat[i] < 50 ? 1 : 0;
+  const r = Math.max(2, Math.round(Math.min(w, h) * rk));
+  const closed = morph(morph(raw, w, h, r, true), w, h, r, false);
+  const lab = new Int32Array(w * h).fill(-1), st = [], cands = [];
+  for (let i = 0; i < closed.length; i++){
+    if (!closed[i] || lab[i] >= 0) continue;
+    const id = cands.length; lab[i] = id; st.push(i);
+    let area = 0, holes = 0, touch = 0; const bx = [], by = [];
+    while (st.length){ const k = st.pop(), x = k % w, y = (k / w) | 0; area++; if (!raw[k]) holes++;
+      if (x === 0 || y === 0 || x === w - 1 || y === h - 1) touch++;
+      let edge = false;
+      for (const q of [k - 1, k + 1, k - w, k + w]){
+        if (q < 0 || q >= closed.length || Math.abs((q % w) - x) > 1){ edge = true; continue; }
+        if (!closed[q]) edge = true; else if (lab[q] < 0){ lab[q] = id; st.push(q); } }
+      if (edge){ bx.push(x); by.push(y); } }
+    cands.push({ area, holes, touch, bx, by });
+  }
+  const k = (img.naturalWidth || img.width) / w, out = [];
+  for (const c of cands){
+    if (c.area < w * h * 0.004 || c.area > w * h * 0.8 || c.bx.length < 8) continue;
+    const R = minRect(c.bx, c.by), rect = c.area / Math.max(1, R.area), ink = c.holes / c.area;
+    const score = rect * rect * Math.sqrt(c.area) * (ink > 0.01 && ink < 0.45 ? 1 : 0.15) * (c.touch > c.bx.length * 0.2 ? 0.3 : 1);
+    out.push({ score, rect, ink, cx: R.cx * k, cy: R.cy * k, w: R.w * k, h: R.h * k, angle: R.angle });
+  }
+  return out.sort((a, b) => b.score - a.score).slice(0, 2);
+}
+
+// cut the rotated rectangle out, upright, long side ≈ 1400 px, slightly inset to drop the sticker edge
+function cutSticker(img, R){
+  const inset = 0.03, W = R.w * (1 - 2 * inset), H = R.h * (1 - 2 * inset);
+  const k = Math.min(4, 1400 / Math.max(W, H));
+  const c = mkCanvas(W * k, H * k), g = ctx2d(c);
+  g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.imageSmoothingQuality = "high";
+  g.translate(c.width / 2, c.height / 2); g.scale(k, k); g.rotate(-R.angle); g.translate(-R.cx, -R.cy);
+  g.drawImage(img, 0, 0);
+  return c.height > c.width * 1.15 ? rotated(c, 90) : c;
+}
+// plain grayscale with contrast stretch (no black/white thresholding)
+function grayStretch(c){
+  const G = grayOf(c), hist = new Uint32Array(256); for (const v of G.gr) hist[v]++;
+  let lo = 0, hi = 255, acc = 0; const n = G.gr.length;
+  for (let v = 0; v < 256; v++){ acc += hist[v]; if (acc < n * 0.01) lo = v; if (acc < n * 0.99) hi = v; }
+  const o = mkCanvas(c.width, c.height), g = ctx2d(o), im = g.createImageData(c.width, c.height), d = im.data, sc = 255 / Math.max(20, hi - lo);
+  for (let i = 0, j = 0; i < n; i++, j += 4){ const v = Math.max(0, Math.min(255, (G.gr[i] - lo) * sc)); d[j] = d[j+1] = d[j+2] = v; d[j+3] = 255; }
+  g.putImageData(im, 0, 0); return o;
+}
+
+// Inside an upright cut: start from the block of text and grow outwards while rows/columns are still paper;
+// stop at the first darker line = the sticker edge (works even when the sticker touches a white lid).
+function paperEdges(c){
+  const sm = scaled(c, 600), G = grayOf(sm), { w, h, gr } = G;
+  const bin = binarize(G, Math.round(w / 10), 0.18, 0), L = letters(bin, w, h);
+  if (L.n < 6) return c;
+  const MB = mainBlock(L, w, h); if (!MB) return c;
+  let { x0, y0, x1, y1 } = MB.box;
+  { // trim to the bulk of the ink (stray specks at the sides are not text)
+    const px = new Float64Array(w), py = new Float64Array(h); let tot = 0;
+    for (let i = 0; i < MB.bin.length; i++) if (!MB.bin[i]){ px[i % w]++; py[(i / w) | 0]++; tot++; }
+    const span = (arr, lo, hi) => { let a = 0, i0 = 0, i1 = arr.length - 1; for (let i = 0; i < arr.length; i++){ a += arr[i]; if (a <= tot * lo) i0 = i; if (a < tot * hi) i1 = i + 1; } return [i0, i1]; };
+    const [qx0, qx1] = span(px, 0.004, 0.996), [qy0, qy1] = span(py, 0.004, 0.996);
+    x0 = Math.max(x0, qx0); x1 = Math.min(x1, qx1); y0 = Math.max(y0, qy0); y1 = Math.min(y1, qy1);
+  }
+  // paper brightness = median of non-ink pixels inside the text box
+  const vals = []; for (let y = y0; y <= y1; y += 2) for (let x = x0; x <= x1; x += 2) if (bin[y*w+x]) vals.push(gr[y*w+x]);
+  vals.sort((a, b) => a - b); const paper = vals[vals.length >> 1] || 200, lim = paper - Math.max(18, paper * 0.12);
+  const rowOk = (y, a, b) => { let ok = 0, n = 0; for (let x = a; x <= b; x++){ n++; if (gr[y*w+x] >= lim || !bin[y*w+x]) ok++; } return ok / n; };
+  const colOk = (x, a, b) => { let ok = 0, n = 0; for (let y = a; y <= b; y++){ n++; if (gr[y*w+x] >= lim || !bin[y*w+x]) ok++; } return ok / n; };
+  // ink pixels count as paper (text sits on paper); a row of mostly dark non-text = edge
+  const plainRow = (y, a, b) => { let ok = 0, n = 0; for (let x = a; x <= b; x++){ n++; if (gr[y*w+x] >= lim) ok++; } return ok / n; };
+  const plainCol = (x, a, b) => { let ok = 0, n = 0; for (let y = a; y <= b; y++){ n++; if (gr[y*w+x] >= lim) ok++; } return ok / n; };
+  // measure each side only across the text span (so a white lid next to the sticker does not leak in)
+  const tx0 = x0, tx1 = x1, ty0 = y0, ty1 = y1;
+  while (y0 > 0 && rowOk(y0 - 1, tx0, tx1) > 0.85) y0--;
+  while (y1 < h - 1 && rowOk(y1 + 1, tx0, tx1) > 0.85) y1++;
+  while (x0 > 0 && colOk(x0 - 1, ty0, ty1) > 0.85) x0--;
+  while (x1 < w - 1 && colOk(x1 + 1, ty0, ty1) > 0.85) x1++;
+  const mg = Math.round(L.medH * 0.5); // keep a little air around the text
+  y0 = Math.min(y0, Math.max(0, ty0 - mg)); y1 = Math.max(y1, Math.min(h - 1, ty1 + mg));
+  x0 = Math.min(x0, Math.max(0, tx0 - mg)); x1 = Math.max(x1, Math.min(w - 1, tx1 + mg));
+  if (window.__pe) window.__pe.push({ w, h, paper, lim, text: [tx0, ty0, tx1, ty1], box: [x0, y0, x1, y1] });
+  const f = c.width / w, m = 2;
+  const X0 = Math.max(0, (x0 + m) * f), Y0 = Math.max(0, (y0 + m) * f), X1 = Math.min(c.width, (x1 + 1 - m) * f), Y1 = Math.min(c.height, (y1 + 1 - m) * f);
+  if (X1 - X0 < 20 || Y1 - Y0 < 20) return c;
+  const k = Math.min(3, 1400 / Math.max(X1 - X0, Y1 - Y0));
+  const o = mkCanvas((X1 - X0) * k, (Y1 - Y0) * k), og = ctx2d(o); og.imageSmoothingQuality = "high";
+  og.drawImage(c, X0, Y0, X1 - X0, Y1 - Y0, 0, 0, o.width, o.height);
+  return o;
+}
+
+async function recognizeB(w, file, debug){
+  const img = await loadBitmap(file);
+  const big = scaled(img, 3000); img.close && img.close();
+  let best = null; const tries = [];
+  const tryOne = async (canvas, psm, tag) => {
+    const o = await ocr(w, canvas, psm), r = parseLabel(o.text);
+    r.conf = o.conf; r.q = quality(r); r.tag = tag; tries.push({ tag, q: +r.q.toFixed(1), text: o.text });
+    if (!best || r.q > best.q){ best = r; if (debug) best.preview = canvas.toDataURL("image/jpeg", 0.8); }
+  };
+  const good = () => best && best.timed >= 2 && best.nameScore >= 1;
+  const st = findStickers(big);
+  for (const R0 of st){
+    let cut = cutSticker(big, R0);
+    cut = paperEdges(cut);
+    const g = grayStretch(cut);
+    await tryOne(g, 6, "B:gray"); if (good()) break;
+    await tryOne(rotated(g, 180), 6, "B:gray180"); if (good()) break;
+    await tryOne(g, 4, "B:gray psm4"); if (good()) break;
+  }
+  if (!best){ best = parseLabel(""); best.q = 0; }
+  best.stickers = st.length; best.tries = tries;
+  big.width = big.height = 0;
+  return best;
+}
+
+
+// ===== lab UI =====
+let worker = null;
+async function getW(){
+  if (worker) return worker;
+  $("st").textContent = "Загружаю распознавание (один раз)…";
+  worker = await Tesseract.createWorker("rus", 1);
+  await worker.setParameters({ preserve_interword_spaces: "1", tessedit_char_whitelist: WHITELIST, user_defined_dpi: "300" });
+  return worker;
+}
+async function runBoth(file){
+  const w = await getW();
+  let t = performance.now(); const A = await recognizeFile(w, file); A.ms = performance.now() - t;
+  t = performance.now(); const Bres = await recognizeB(w, file, true); Bres.ms = performance.now() - t;
+  return { A, B: Bres };
+}
+window.labRun = runBoth;
+window.__lab = { findStickers, cutSticker, loadBitmap, scaled, grayStretch, grayOf, otsu };
+const show = r => r.expires ? (() => { const d = parseExp(r.expires); return `${fmtDate(d)} ${fmtTime(d)}`; })() : "—";
+let tot = { n: 0, aD: 0, bD: 0, aT: 0, bT: 0 };
+function col(title, r, win){
+  const c = document.createElement("div"); c.className = "col" + (win ? " win" : "");
+  c.innerHTML = `<h3></h3><div><span class="k">Название: </span><span class="v n"></span></div><div><span class="k">Годен до: </span><span class="v e"></span></div><div class="k t"></div>`;
+  c.querySelector("h3").textContent = title; c.querySelector(".n").textContent = r.name || "—"; c.querySelector(".e").textContent = show(r);
+  c.querySelector(".t").textContent = `${(r.ms/1000).toFixed(1)} с · уверенность ${Math.round(r.conf||0)}${r.stickers!=null ? " · наклеек найдено: " + r.stickers : ""}`;
+  if (r.preview){ const im = document.createElement("img"); im.src = r.preview; im.alt = "Что читал алгоритм"; c.append(im); }
+  const d = document.createElement("details"); d.innerHTML = "<summary>сырой текст</summary>"; const pre = document.createElement("div"); pre.className = "mono"; pre.textContent = r.raw || ""; d.append(pre); c.append(d);
+  return c;
+}
+$("f").onchange = async e => {
+  const files = [...e.target.files]; e.target.value = "";
+  for (let i = 0; i < files.length; i++){
+    $("st").textContent = `Обрабатываю ${i+1} из ${files.length}…`;
+    const card = document.createElement("div"); card.className = "card";
+    const th = document.createElement("img"); th.className = "thumb"; th.src = URL.createObjectURL(files[i]); th.alt = files[i].name; card.append(th);
+    $("out").prepend(card);
+    try {
+      const { A, B } = await runBoth(files[i]);
+      const cols = document.createElement("div"); cols.className = "cols";
+      cols.append(col("A — сейчас", A, A.q > B.q + 0.5), col("Б — по границам наклейки", B, B.q > A.q + 0.5)); card.append(cols);
+      tot.n++; tot.aD += !!A.expires; tot.bD += !!B.expires; tot.aT += A.ms; tot.bT += B.ms;
+      $("tot").hidden = false;
+      $("tot").innerHTML = `<span>Фото: ${tot.n}</span><span>A нашёл срок: ${tot.aD} · ср. ${(tot.aT/tot.n/1000).toFixed(1)} с</span><span>Б нашёл срок: ${tot.bD} · ср. ${(tot.bT/tot.n/1000).toFixed(1)} с</span>`;
+    } catch(err){ const p = document.createElement("p"); p.textContent = "Ошибка: " + err.message; card.append(p); }
+  }
+  $("st").textContent = "Готово. Сверьте сроки с фото: зелёным подсвечен вариант, который сам алгоритм считает более надёжным.";
+};
+})();
+</script>
+</body>
+</html>
