@@ -102,6 +102,22 @@ details.group>summary::-webkit-details-marker{display:none}
 .copyout{width:100%;min-height:120px;font-family:var(--mono);font-size:16px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:10px}
 .viewer{position:fixed;inset:0;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;padding:max(16px,env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) max(16px,env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));z-index:20}
 .viewer img{max-height:100%;border-radius:10px}
+.fab{position:fixed;left:50%;transform:translateX(-50%);bottom:max(16px,env(safe-area-inset-bottom,0px));z-index:15;
+  background:var(--today);color:var(--bg);border-color:var(--today);border-radius:999px;padding:14px 22px;font-size:16px;box-shadow:0 6px 20px rgba(0,0,0,.25);white-space:nowrap;max-width:calc(100% - 32px)}
+.fab b{font-family:var(--mono);margin-left:6px;background:rgba(127,127,127,.3);border-radius:99px;padding:1px 8px}
+.sheet-bg{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:30;display:flex;align-items:flex-end;justify-content:center}
+.sheet{background:var(--surface);color:var(--fg);width:100%;max-width:760px;max-height:92vh;max-height:92dvh;border-radius:18px 18px 0 0;display:flex;flex-direction:column;gap:12px;
+  padding:16px max(16px,env(safe-area-inset-right,0px)) max(16px,env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+@media (min-width:700px){.sheet-bg{align-items:center}.sheet{border-radius:18px}}
+.sheet-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.sheet-head h2{margin:0;font-size:18px}
+.sheet-head button{min-height:40px;padding:6px 12px}
+.sheet textarea{flex:1 1 auto;min-height:220px;width:100%;resize:none;font-family:var(--mono);font-size:16px;line-height:1.55;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:12px}
+.sheet .opts{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:14px}
+.sheet .opts input{width:20px;height:20px;accent-color:var(--accent)}
+.sheet .btns{display:flex;gap:8px}
+.sheet .btns button{flex:1 1 0}
+body.has-fab{padding-bottom:max(110px,calc(env(safe-area-inset-bottom,0px) + 90px))}
 .foot{color:var(--muted);font-size:13px;margin:0}
 @media (prefers-reduced-motion:reduce){.bar>i{transition:none}}
 </style>
@@ -145,10 +161,9 @@ details.group>summary::-webkit-details-marker{display:none}
   <section class="group" id="gToday">
     <div class="ghead">
       <h2><span class="dot" style="background:var(--today)"></span>Списать сегодня</h2>
-      <div class="acts"><button id="shareBtn" hidden>Отправить</button><button id="copyBtn">Скопировать список</button></div>
+      <div class="acts"><button id="openListBtn">📋 Список текстом</button></div>
     </div>
     <ul class="rows" id="listToday"></ul>
-    <div id="copyWrap" hidden style="padding:0 14px 14px"><textarea class="copyout" id="copyOut" readonly></textarea></div>
   </section>
 
   <section class="group" id="gExp">
@@ -174,6 +189,15 @@ details.group>summary::-webkit-details-marker{display:none}
 </div>
 
 <datalist id="names"></datalist>
+<button class="fab" id="fab" hidden>📋 Списать <b id="fabN">0</b></button>
+<div class="sheet-bg" id="sheetBg" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <div class="sheet-head"><h2 id="sheetTitle">Список на списание</h2><button id="sheetClose" aria-label="Закрыть">Готово</button></div>
+    <label class="opts"><input type="checkbox" id="withExp" checked> Добавить уже просроченное</label>
+    <textarea id="listOut" aria-label="Текст списка"></textarea>
+    <div class="btns"><button class="btn-primary" id="copyBtn">Скопировать</button><button id="shareBtn" hidden>Отправить</button></div>
+  </div>
+</div>
 <div class="viewer" id="viewer" hidden><img id="viewerImg" alt="Фото маркировки"></div>
 
 <script>
@@ -267,24 +291,43 @@ function render(){
   $("gExp").hidden = !g.exp.length; $("gUnk").hidden = !g.unk.length;
   $("nToday").textContent=g.today.length; $("nExp").textContent=g.exp.length; $("nUnk").textContent=g.unk.length; $("nOk").textContent=g.ok.length; $("okCount").textContent=g.ok.length;
   window.__groups = g;
+  const due = g.today.length + g.exp.length;
+  $("fab").hidden = !due; $("fabN").textContent = due; document.body.classList.toggle("has-fab", !!due);
+  if (!$("sheetBg").hidden && document.activeElement !== $("listOut")) $("listOut").value = listText();
 }
 
 function listText(){
   const g = window.__groups || {today:[],exp:[]};
+  const nm = it => it.name || "Без названия";
   const lines = [`Списать ${fmtDate(now())}:`];
-  g.today.forEach(it => lines.push(`${fmtTime(parseExp(it.expires))} — ${it.name||"Без названия"}`));
-  if (g.exp.length){ lines.push("", "Уже просрочено:"); g.exp.forEach(it=>{const d=parseExp(it.expires); lines.push(`${fmtDate(d)} ${fmtTime(d)} — ${it.name||"Без названия"}`);}); }
+  if (!g.today.length) lines.push("— ничего не истекает сегодня");
+  g.today.forEach((it, i) => lines.push(`${i+1}. ${nm(it)} — до ${fmtTime(parseExp(it.expires))}`));
+  if ($("withExp").checked && g.exp.length){
+    lines.push("", "Уже просрочено:");
+    g.exp.forEach((it, i) => { const d = parseExp(it.expires); lines.push(`${i+1}. ${nm(it)} — ${fmtDate(d)} ${fmtTime(d)}`); });
+  }
   return lines.join("\n");
 }
+function openList(){
+  $("listOut").value = listText();
+  $("sheetBg").hidden = false; document.body.style.overflow = "hidden";
+}
+function closeList(){ $("sheetBg").hidden = true; document.body.style.overflow = ""; }
+$("openListBtn").onclick = openList;
+$("fab").onclick = openList;
+$("sheetClose").onclick = closeList;
+$("sheetBg").onclick = e => { if (e.target === $("sheetBg")) closeList(); };
+$("withExp").onchange = () => { $("listOut").value = listText(); };
 $("copyBtn").onclick = async () => {
-  const text = listText();
-  try { await navigator.clipboard.writeText(text); $("copyBtn").textContent = "Скопировано"; setTimeout(()=>$("copyBtn").textContent="Скопировать список",1500); }
-  catch(e){ $("copyWrap").hidden=false; $("copyOut").value=text; $("copyOut").select(); }
+  const text = $("listOut").value;
+  try { await navigator.clipboard.writeText(text); }
+  catch(e){ $("listOut").focus(); $("listOut").select(); try { document.execCommand("copy"); } catch(_){} }
+  $("copyBtn").textContent = "Скопировано ✓"; setTimeout(() => $("copyBtn").textContent = "Скопировать", 1500);
 };
 // native share sheet (WhatsApp, Telegram, Notes…)
 if (navigator.share) {
   $("shareBtn").hidden = false;
-  $("shareBtn").onclick = () => { navigator.share({ title: "Списать сегодня", text: listText() }).catch(() => {}); };
+  $("shareBtn").onclick = () => { navigator.share({ title: "Списать сегодня", text: $("listOut").value }).catch(() => {}); };
 }
 $("viewer").onclick = () => { $("viewer").hidden = true; };
 $("clearBtn").onclick = () => { $("clearConfirm").hidden = false; };
