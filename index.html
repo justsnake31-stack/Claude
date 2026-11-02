@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Контроль сроков</title>
+<meta name="theme-color" content="#0f7a5c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Сроки">
+<meta name="format-detection" content="telephone=no">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+/* Layout: one narrow working column, like a clipboard at the prep station: upload strip on top, write-off list as the main sheet, other groups below. */
+:root{
+  --bg:#f3f5f4; --surface:#ffffff; --fg:#17201d; --muted:#5d6b66; --line:#dfe5e2;
+  --accent:#0f7a5c; --accent-ink:#ffffff;
+  --today:#c2410c; --today-bg:#fff1e8; --expired:#b42318; --expired-bg:#fdecea;
+  --ok:#2f6f4f; --ok-bg:#e8f4ee; --unk:#8a6a00; --unk-bg:#fbf4dc;
+  --sans:"Golos Text",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#111816; --surface:#19221f; --fg:#e7eeeb; --muted:#97a7a1; --line:#2a3632;
+  --accent:#3cc497; --accent-ink:#06261b;
+  --today:#ff9a5c; --today-bg:#3a2216; --expired:#ff7b70; --expired-bg:#3b1a18;
+  --ok:#7fd3a8; --ok-bg:#16302a; --unk:#e6c254; --unk-bg:#332b10; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#111816; --surface:#19221f; --fg:#e7eeeb; --muted:#97a7a1; --line:#2a3632;
+  --accent:#3cc497; --accent-ink:#06261b;
+  --today:#ff9a5c; --today-bg:#3a2216; --expired:#ff7b70; --expired-bg:#3b1a18;
+  --ok:#7fd3a8; --ok-bg:#16302a; --unk:#e6c254; --unk-bg:#332b10; color-scheme:dark}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+img{max-width:100%}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:15px;line-height:1.45;-webkit-tap-highlight-color:transparent;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-top:max(20px,env(safe-area-inset-top,0px));padding-bottom:max(48px,env(safe-area-inset-bottom,0px))}
+.wrap{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px}
+h1{font-size:24px;font-weight:700;margin:0;text-wrap:balance}
+.date{font-family:var(--mono);font-size:14px;color:var(--muted)}
+.drop{background:var(--surface);border:2px dashed var(--line);border-radius:14px;padding:18px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
+.drop.over{border-color:var(--accent)}
+.drop p{margin:0;color:var(--muted);min-width:0;flex:1 1 240px}
+.drop strong{color:var(--fg)}
+.drop .btns{display:flex;gap:8px;flex-wrap:wrap;flex:1 1 240px}
+.drop .btns .btn{flex:1 1 140px;text-align:center}
+button,.btn{font:inherit;font-weight:600;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--fg);padding:12px 14px;cursor:pointer;min-height:44px}
+.btn-primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+button:disabled{opacity:.5;cursor:default}
+button:focus-visible,.btn:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+input[type=file]{position:absolute;width:1px;height:1px;opacity:0}
+.progress{display:flex;flex-direction:column;gap:6px}
+.bar{height:8px;background:var(--line);border-radius:99px;overflow:hidden}
+.bar>i{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
+.progress small{color:var(--muted);font-variant-numeric:tabular-nums}
+.summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.sum{border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.sum b{font-family:var(--mono);font-size:22px;font-variant-numeric:tabular-nums}
+.sum span{font-size:12px;letter-spacing:.03em}
+.s-today{background:var(--today-bg);color:var(--today)}
+.s-exp{background:var(--expired-bg);color:var(--expired)}
+.s-unk{background:var(--unk-bg);color:var(--unk)}
+.s-ok{background:var(--ok-bg);color:var(--ok)}
+@media (max-width:480px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
+section.group{background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.ghead{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.ghead h2{margin:0;font-size:16px;display:flex;align-items:center;gap:8px}
+.dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+.ghead .acts{display:flex;gap:8px;flex-wrap:wrap}
+.ghead button{padding:8px 12px;font-size:13px;min-height:36px}
+ul.rows{list-style:none;margin:0;padding:0}
+.row{display:grid;grid-template-columns:56px minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
+.row:first-child{border-top:0}
+.thumb{width:56px;height:56px;border-radius:8px;object-fit:cover;background:var(--line);cursor:zoom-in}
+.thumb.empty{display:block}
+.name{font-weight:600;overflow-wrap:anywhere}
+.meta{font-size:13px;color:var(--muted);overflow-wrap:anywhere}
+.time{font-family:var(--mono);font-weight:700;font-size:16px;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.time small{display:block;font-family:var(--sans);font-weight:500;font-size:12px;color:var(--muted)}
+.edit{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+/* 16px inputs stop iOS Safari from zooming in on focus */
+.edit input{font:inherit;font-size:16px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);min-width:0}
+.edit input[type=text]{flex:1 1 140px}
+.edit input[type=datetime-local]{flex:1 1 180px}
+.edit button{padding:8px 12px;font-size:14px;min-height:40px}
+.empty-note{padding:14px;color:var(--muted);margin:0}
+.example{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:2px 6px}
+details.group>summary{list-style:none;cursor:pointer}
+details.group>summary::-webkit-details-marker{display:none}
+.notice{background:var(--unk-bg);color:var(--unk);border-radius:12px;padding:12px 14px;margin:0}
+.install{background:var(--ok-bg);color:var(--ok);border-radius:12px;padding:12px 14px;margin:0;display:flex;gap:10px;align-items:flex-start;justify-content:space-between}
+.install button{padding:4px 10px;min-height:32px;font-size:13px;flex:none}
+.copyout{width:100%;min-height:120px;font-family:var(--mono);font-size:16px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:10px}
+.viewer{position:fixed;inset:0;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;padding:max(16px,env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) max(16px,env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));z-index:20}
+.viewer img{max-height:100%;border-radius:10px}
+.foot{color:var(--muted);font-size:13px;margin:0}
+@media (prefers-reduced-motion:reduce){.bar>i{transition:none}}
+</style>
+</head>
+<body>
+
+
+<div class="wrap">
+  <header>
+    <h1>Контроль сроков</h1>
+    <span class="date" id="today"></span>
+  </header>
+
+  <p class="install" id="installTip" hidden><span>Чтобы установить как приложение: нажмите <strong>«Поделиться»</strong> внизу Safari → <strong>«На экран „Домой“»</strong>.</span><button id="installClose" aria-label="Скрыть подсказку">✕</button></p>
+
+  <div class="drop" id="drop">
+    <p><strong>Сфотографируйте маркировки</strong> или выберите из галереи — можно сразу пачкой. Распознавание идёт прямо на телефоне, без интернета (после первого запуска).</p>
+    <div class="btns">
+      <label class="btn btn-primary" for="cam">📷 Снять</label>
+      <label class="btn" for="file">Из галереи</label>
+    </div>
+    <input type="file" id="cam" accept="image/*" capture="environment">
+    <input type="file" id="file" accept="image/*" multiple>
+  </div>
+
+  <p class="notice" id="noAi" hidden></p>
+
+  <div class="progress" id="progress" hidden>
+    <div class="bar"><i id="barFill"></i></div>
+    <small id="progText"></small>
+    <div><button id="stopBtn">Остановить</button></div>
+  </div>
+
+  <div class="summary" id="summary">
+    <div class="sum s-today"><b id="nToday">0</b><span>списать сегодня</span></div>
+    <div class="sum s-exp"><b id="nExp">0</b><span>уже просрочено</span></div>
+    <div class="sum s-unk"><b id="nUnk">0</b><span>не прочитано</span></div>
+    <div class="sum s-ok"><b id="nOk">0</b><span>в сроке</span></div>
+  </div>
+
+  <section class="group" id="gToday">
+    <div class="ghead">
+      <h2><span class="dot" style="background:var(--today)"></span>Списать сегодня</h2>
+      <div class="acts"><button id="shareBtn" hidden>Отправить</button><button id="copyBtn">Скопировать список</button></div>
+    </div>
+    <ul class="rows" id="listToday"></ul>
+    <div id="copyWrap" hidden style="padding:0 14px 14px"><textarea class="copyout" id="copyOut" readonly></textarea></div>
+  </section>
+
+  <section class="group" id="gExp">
+    <div class="ghead"><h2><span class="dot" style="background:var(--expired)"></span>Уже просрочено</h2></div>
+    <ul class="rows" id="listExp"></ul>
+  </section>
+
+  <section class="group" id="gUnk">
+    <div class="ghead"><h2><span class="dot" style="background:var(--unk)"></span>Не удалось прочитать — впишите вручную</h2></div>
+    <ul class="rows" id="listUnk"></ul>
+  </section>
+
+  <details class="group" id="gOk">
+    <summary class="ghead"><h2><span class="dot" style="background:var(--ok)"></span>В сроке (после сегодня) — <span id="okCount">0</span></h2><span class="meta">развернуть</span></summary>
+    <ul class="rows" id="listOk"></ul>
+  </details>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <button id="clearBtn">Очистить всё и начать новый день</button>
+    <span id="clearConfirm" hidden style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="meta">Точно удалить все результаты?</span><button id="clearYes">Да, очистить</button><button id="clearNo">Отмена</button></span>
+  </div>
+  <p class="foot">Результаты сохраняются на этом телефоне до очистки. Фото после перезапуска приложения не показываются, остаются только названия и сроки. Проверяйте спорные позиции глазами: программа может ошибиться в цифрах, особенно на смятых или бликующих наклейках. Первый запуск требует интернета (загружается ~15 МБ), дальше работает и без него.</p>
+</div>
+
+<div class="viewer" id="viewer" hidden><img id="viewerImg" alt="Фото маркировки"></div>
+
+<script>
+(() => {
+const $ = id => document.getElementById(id);
+const STORE = "srok-results-v1";
+const pad = n => String(n).padStart(2,"0");
+const now = () => new Date();
+const ymd = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+const fmtDate = d => `${pad(d.getDate())}.${pad(d.getMonth()+1)}`;
+const fmtTime = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const standalone = window.navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
+const updateDate = () => { $("today").textContent = new Date().toLocaleDateString("ru-RU",{weekday:"long",day:"numeric",month:"long"}); };
+updateDate();
+
+// install hint for iPhone Safari
+try {
+  if (isIOS && !standalone && !localStorage.getItem("srok-hide-install")) $("installTip").hidden = false;
+} catch(e){}
+$("installClose").onclick = () => { $("installTip").hidden = true; try{ localStorage.setItem("srok-hide-install","1"); }catch(e){} };
+
+// offline support
+if ("serviceWorker" in navigator && location.protocol !== "file:") {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+}
+
+let items = [];        // {id, name, expires (ISO local "YYYY-MM-DDTHH:MM" or ""), note, status:"pending"|"done", url?}
+let showExamples = true;
+try { const s = JSON.parse(localStorage.getItem(STORE)||"null"); if (Array.isArray(s)) { items = s.map(x=>({...x, url:null})).filter(x=>x.status==="done"); if (items.length) showExamples=false; } } catch(e){}
+const save = () => { try { localStorage.setItem(STORE, JSON.stringify(items.filter(x=>x.status==="done").map(({url,file,...r})=>r))); } catch(e){} };
+
+const parseExp = s => { if (!s) return null; const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{1,2}):(\d{2}))?/.exec(s); if(!m) return null; return new Date(+m[1],+m[2]-1,+m[3], m[4]!=null?+m[4]:23, m[5]!=null?+m[5]:59); };
+function classify(it){
+  const d = parseExp(it.expires); if (!d) return "unk";
+  const n = now();
+  if (d < n) return "exp";
+  if (ymd(d) === ymd(n)) return "today";
+  return "ok";
+}
+
+const EXAMPLES = [
+  {id:"ex1",name:"Сыр моцарелла (тёртый)",expires:`${ymd(now())}T14:30`,note:"Изготовлено 31.10 14:30",status:"done",example:true},
+  {id:"ex2",name:"Томаты свежие",expires:`${ymd(now())}T18:00`,note:"Изготовлено 01.11 18:00",status:"done",example:true},
+  {id:"ex3",name:"Соус Альфредо",expires:`${ymd(now())}T22:15`,note:"Вскрыто 30.10 22:15",status:"done",example:true},
+];
+
+function rowEl(it, cls){
+  const li = document.createElement("li"); li.className = "row";
+  const img = document.createElement(it.url ? "img" : "span");
+  img.className = "thumb" + (it.url ? "" : " empty");
+  if (it.url){ img.src = it.url; img.alt = it.name || "Фото"; img.onclick = () => { $("viewerImg").src = it.url; $("viewer").hidden = false; }; }
+  const mid = document.createElement("div"); mid.style.minWidth = "0";
+  const nm = document.createElement("div"); nm.className="name";
+  nm.textContent = it.name || "Без названия";
+  if (it.example){ const ex=document.createElement("span"); ex.className="example"; ex.textContent="пример"; nm.append(" ",ex); }
+  const meta = document.createElement("div"); meta.className="meta"; meta.textContent = it.note || "";
+  mid.append(nm, meta);
+  const right = document.createElement("div"); right.className = "time";
+  const d = parseExp(it.expires);
+  if (d){ right.textContent = cls==="ok" ? fmtDate(d) : fmtTime(d); const s=document.createElement("small"); s.textContent = cls==="ok" ? fmtTime(d) : (cls==="exp" && ymd(d)!==ymd(now()) ? fmtDate(d) : "годен до"); right.append(s); }
+  if (!it.example && (cls==="unk")) mid.append(editor(it));
+  else if (!it.example){ const b=document.createElement("button"); b.textContent="Исправить"; b.style.cssText="padding:6px 10px;font-size:13px;margin-top:4px;min-height:34px"; b.onclick=()=>{ b.replaceWith(editor(it)); }; mid.append(b); }
+  li.append(img, mid, right);
+  return li;
+}
+function editor(it){
+  const f = document.createElement("form"); f.className="edit";
+  const n = document.createElement("input"); n.type="text"; n.id="n-"+it.id; n.placeholder="Продукт"; n.value=it.name||"";
+  const t = document.createElement("input"); t.type="datetime-local"; t.id="t-"+it.id; t.value=it.expires||"";
+  const b = document.createElement("button"); b.type="submit"; b.textContent="Сохранить";
+  f.append(n,t,b);
+  f.onsubmit = e => { e.preventDefault(); it.name=n.value.trim(); it.expires=t.value; it.note=(it.note||"")+(it.note?" · ":"")+"исправлено вручную"; save(); render(); };
+  return f;
+}
+
+function render(){
+  // don't rebuild while the user is typing in an edit form
+  if (document.activeElement && document.activeElement.closest && document.activeElement.closest(".edit")) return;
+  const real = items.filter(x=>x.status==="done");
+  const list = (real.length || !showExamples) ? real : EXAMPLES;
+  const g = {today:[],exp:[],unk:[],ok:[]};
+  list.forEach(it => g[classify(it)].push(it));
+  const byTime = (a,b) => (parseExp(a.expires)||0) - (parseExp(b.expires)||0);
+  g.today.sort(byTime); g.exp.sort(byTime); g.ok.sort(byTime);
+  const fill = (ul, arr, cls, emptyText) => { ul.replaceChildren(); if(!arr.length){ const p=document.createElement("p"); p.className="empty-note"; p.textContent=emptyText; ul.append(p);} arr.forEach(it=>ul.append(rowEl(it,cls))); };
+  fill($("listToday"), g.today, "today", "Ничего не истекает сегодня.");
+  fill($("listExp"), g.exp, "exp", "Просроченного нет.");
+  fill($("listUnk"), g.unk, "unk", "Все маркировки прочитаны.");
+  fill($("listOk"), g.ok, "ok", "Пока пусто.");
+  $("gExp").hidden = !g.exp.length; $("gUnk").hidden = !g.unk.length;
+  $("nToday").textContent=g.today.length; $("nExp").textContent=g.exp.length; $("nUnk").textContent=g.unk.length; $("nOk").textContent=g.ok.length; $("okCount").textContent=g.ok.length;
+  window.__groups = g;
+}
+
+function listText(){
+  const g = window.__groups || {today:[],exp:[]};
+  const lines = [`Списать ${fmtDate(now())}:`];
+  g.today.forEach(it => lines.push(`${fmtTime(parseExp(it.expires))} — ${it.name||"Без названия"}`));
+  if (g.exp.length){ lines.push("", "Уже просрочено:"); g.exp.forEach(it=>{const d=parseExp(it.expires); lines.push(`${fmtDate(d)} ${fmtTime(d)} — ${it.name||"Без названия"}`);}); }
+  return lines.join("\n");
+}
+$("copyBtn").onclick = async () => {
+  const text = listText();
+  try { await navigator.clipboard.writeText(text); $("copyBtn").textContent = "Скопировано"; setTimeout(()=>$("copyBtn").textContent="Скопировать список",1500); }
+  catch(e){ $("copyWrap").hidden=false; $("copyOut").value=text; $("copyOut").select(); }
+};
+// native share sheet (WhatsApp, Telegram, Notes…)
+if (navigator.share) {
+  $("shareBtn").hidden = false;
+  $("shareBtn").onclick = () => { navigator.share({ title: "Списать сегодня", text: listText() }).catch(() => {}); };
+}
+$("viewer").onclick = () => { $("viewer").hidden = true; };
+$("clearBtn").onclick = () => { $("clearConfirm").hidden = false; };
+$("clearNo").onclick = () => { $("clearConfirm").hidden = true; };
+$("clearYes").onclick = () => { items.forEach(x=>x.url&&URL.revokeObjectURL(x.url)); items=[]; showExamples=false; save(); $("clearConfirm").hidden=true; render(); };
+
+// ---- recognition: on-device OCR (Tesseract.js) ----
+const queue = [];
+let running = false, stopFlag = false, scheduler = null, schedulerPromise = null, total = 0, doneCount = 0;
+// iPhone Safari kills tabs that use too much memory, so keep OCR workers few there
+const WORKERS = isIOS ? 2 : Math.max(2, Math.min(6, (navigator.hardwareConcurrency || 4) - 1));
+
+async function getScheduler(){
+  if (scheduler) return scheduler;
+  if (!schedulerPromise) schedulerPromise = (async () => {
+    if (!window.Tesseract) throw new Error("no-lib");
+    $("progText").textContent = "Первый запуск: загружаю распознавание русского текста (один раз, ~15 МБ)…";
+    const s = Tesseract.createScheduler();
+    const ws = await Promise.all(Array.from({length: WORKERS}, () => Tesseract.createWorker("rus", 1)));
+    for (const w of ws){
+      await w.setParameters({ tessedit_pageseg_mode: "6", preserve_interword_spaces: "1" });
+      s.addWorker(w);
+    }
+    scheduler = s; return s;
+  })();
+  return schedulerPromise;
+}
+
+// Shrink + grayscale + contrast: OCR runs much faster on ~1400px images and reads thermal labels better.
+async function loadBitmap(file){
+  if (window.createImageBitmap){
+    try { return await createImageBitmap(file, { imageOrientation: "from-image" }); } catch(e){}
+    try { return await createImageBitmap(file); } catch(e){}
+  }
+  // fallback for older Safari
+  return await new Promise((res, rej) => { const u = URL.createObjectURL(file); const im = new Image(); im.onload = () => { URL.revokeObjectURL(u); res(im); }; im.onerror = () => { URL.revokeObjectURL(u); rej(new Error("img")); }; im.src = u; });
+}
+async function prepare(file){
+  const bmp = await loadBitmap(file);
+  const W = bmp.naturalWidth || bmp.width, H = bmp.naturalHeight || bmp.height;
+  const MAX = 1400, k = Math.min(1, MAX / Math.max(W, H));
+  const c = document.createElement("canvas");
+  c.width = Math.round(W * k); c.height = Math.round(H * k);
+  const g = c.getContext("2d", { willReadFrequently: true });
+  g.drawImage(bmp, 0, 0, c.width, c.height); bmp.close && bmp.close();
+  const im = g.getImageData(0, 0, c.width, c.height), d = im.data;
+  for (let i = 0; i < d.length; i += 4){
+    let y = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+    y = (y - 128) * 1.5 + 128; y = y < 0 ? 0 : y > 255 ? 255 : y;
+    d[i] = d[i+1] = d[i+2] = y;
+  }
+  g.putImageData(im, 0, 0);
+  return c;
+}
+
+// ---- parsing the label text ----
+function fixDigits(s){
+  // typical OCR confusions inside numbers
+  return s.replace(/[OoОо](?=\d)|(?<=\d)[OoОо]/g, "0").replace(/(?<=\d)[lI|]|[lI|](?=\d)/g, "1").replace(/(?<=\d)[ЗзZ]|[ЗзZ](?=\d)/g, "3").replace(/(?<=\d)[Бб]|[Бб](?=\d)/g, "6");
+}
+function findDates(text){
+  const t = fixDigits(text);
+  const out = [];
+  // dd.mm[.yy|.yyyy] [hh:mm]  — separators . , / -
+  const re = /(\d{1,2})\s?[.,\/-]\s?(\d{1,2})(?:\s?[.,\/-]\s?(\d{2,4}))?(?:[^\d\n]{0,6}?(\d{1,2})\s?[:.]\s?(\d{2}))?/g;
+  let m;
+  while ((m = re.exec(t))){
+    const dd = +m[1], mm = +m[2];
+    if (dd < 1 || dd > 31 || mm < 1 || mm > 12) continue;
+    if (m[2].length < 2 && !m[3] && m[4] == null) continue; // "1,5 кг" is not a date
+    let hh = m[4] != null ? +m[4] : null, mi = m[5] != null ? +m[5] : null;
+    if (hh != null && (hh > 23 || mi > 59)){ hh = null; mi = null; }
+    let yy = m[3] ? +m[3] : null; if (yy != null && yy < 100) yy += 2000;
+    out.push({ dd, mm, yy, hh, mi, idx: m.index, len: m[0].length });
+  }
+  return out;
+}
+function toDate(x){
+  const n = new Date();
+  let y = x.yy;
+  if (!y){
+    // nearest year to today
+    const cands = [n.getFullYear()-1, n.getFullYear(), n.getFullYear()+1].map(Y => new Date(Y, x.mm-1, x.dd));
+    cands.sort((a,b) => Math.abs(a-n) - Math.abs(b-n)); y = cands[0].getFullYear();
+  }
+  return new Date(y, x.mm-1, x.dd, x.hh ?? 23, x.mi ?? 59);
+}
+const iso = d => `${ymd(d)}T${fmtTime(d)}`;
+const short = x => `${pad(x.dd)}.${pad(x.mm)}${x.hh!=null?" "+pad(x.hh)+":"+pad(x.mi):""}`;
+
+function parseLabel(text){
+  const lines = text.split(/\n+/).map(s => s.replace(/\s+/g," ").trim()).filter(Boolean);
+  // name: first line with real words, not a date/keyword line
+  let name = "";
+  for (const l of lines){
+    const letters = (l.match(/[А-Яа-яЁё]/g) || []).length;
+    if (letters >= 4 && !findDates(l).length && !/^(годен|использ|употреб|срок|изготов|дата|время)/i.test(l)){ name = l.replace(/[|_~*]+/g,"").trim(); break; }
+  }
+  const ds = findDates(text);
+  let exp = null, note = "";
+  if (ds.length >= 3){
+    // triple label: taken out / defrosted / expires
+    exp = ds[2];
+    note = `Достали ${short(ds[0])}, разморозится ${short(ds[1])}`;
+  } else {
+    // a date right after "годен до / использовать до / употребить до" wins
+    const kw = /(годен|годн[оа]?|использ\w*|употреб\w*|срок\s*годн\w*)\s*(до)?/ig;
+    let m, best = null;
+    const t = fixDigits(text);
+    while ((m = kw.exec(t))){ const after = ds.find(x => x.idx >= m.index); if (after){ best = after; } }
+    if (best) exp = best;
+    else if (ds.length === 2) exp = toDate(ds[0]) > toDate(ds[1]) ? ds[0] : ds[1];
+    else if (ds.length === 1) exp = ds[0];
+    if (ds.length === 2){ const other = ds.find(x => x !== exp); if (other) note = `Изготовлено/вскрыто ${short(other)}`; }
+  }
+  return { name, expires: exp ? iso(toDate(exp)) : "", note: (note + (exp && exp.hh == null ? (note?" · ":"") + "время не найдено" : "")).trim(), raw: lines.join(" / ") };
+}
+
+function updateProgress(){
+  $("progress").hidden = !running && !queue.length;
+  $("barFill").style.width = total ? (doneCount/total*100) + "%" : "0";
+  if (scheduler) $("progText").textContent = `Прочитано ${doneCount} из ${total} фото`;
+}
+async function pump(){
+  if (running) return;
+  running = true; stopFlag = false; updateProgress();
+  let s;
+  try { s = await getScheduler(); }
+  catch(e){
+    running = false; schedulerPromise = null;
+    $("noAi").hidden = false;
+    $("noAi").textContent = "Не удалось загрузить распознавание. При первом запуске нужен интернет — подключитесь и выберите фото ещё раз.";
+    updateProgress(); return;
+  }
+  const one = async () => {
+    while (queue.length && !stopFlag){
+      const it = queue.shift();
+      try {
+        const canvas = await prepare(it.file);
+        const { data } = await s.addJob("recognize", canvas);
+        canvas.width = canvas.height = 0; // free memory early on iPhone
+        const r = parseLabel(data.text || "");
+        it.name = r.name; it.expires = r.expires; it.note = r.note || (r.expires ? "" : "Срок не найден: " + r.raw.slice(0, 80));
+      } catch(e){ it.name = it.name || ""; it.expires = ""; it.note = "Не удалось обработать фото"; }
+      it.status = "done"; it.file = null; doneCount++;
+      save(); render(); updateProgress();
+    }
+  };
+  await Promise.all(Array.from({length: WORKERS}, one));
+  running = false; updateProgress();
+  if (queue.length){
+    $("noAi").hidden = false; $("noAi").replaceChildren(`Остановлено. В очереди ещё ${queue.length} фото.`, " ");
+    const b = document.createElement("button"); b.textContent = "Продолжить"; b.style.marginLeft = "8px";
+    b.onclick = () => { $("noAi").hidden = true; pump(); }; $("noAi").append(b);
+  } else { $("noAi").hidden = true; total = 0; doneCount = 0; }
+}
+$("stopBtn").onclick = () => { stopFlag = true; };
+
+function addFiles(files){
+  const imgs = [...files].filter(f => /^image\//.test(f.type) || /\.(jpe?g|png|webp|heic|heif)$/i.test(f.name || ""));
+  if (!imgs.length) return;
+  showExamples = false;
+  imgs.forEach((f, k) => { const it = {id: Date.now().toString(36)+"-"+k+"-"+Math.random().toString(36).slice(2,6), file:f, url:URL.createObjectURL(f), name:"", expires:"", note:"", status:"pending", fromUpload:true}; items.push(it); queue.push(it); });
+  total += imgs.length;
+  render(); pump();
+}
+$("file").onchange = e => { addFiles(e.target.files); e.target.value=""; };
+$("cam").onchange = e => { addFiles(e.target.files); e.target.value=""; };
+const drop = $("drop");
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); addFiles(e.dataTransfer.files); });
+document.addEventListener("dragover", e => e.preventDefault());
+document.addEventListener("drop", e => { e.preventDefault(); if (e.target.closest && !e.target.closest("#drop")) addFiles(e.dataTransfer.files); });
+
+render();
+setInterval(render, 60000);
+// refresh immediately when the app comes back from background (iOS freezes timers)
+document.addEventListener("visibilitychange", () => { if (!document.hidden){ updateDate(); render(); } });
+// warm up OCR in the background so the first batch starts faster
+if (window.Tesseract) getScheduler().then(() => { if (!running) $("progText").textContent = ""; }).catch(() => { schedulerPromise = null; });
+})();
+</script>
+
+</body>
+</html>
