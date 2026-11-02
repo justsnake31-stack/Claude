@@ -643,10 +643,11 @@ async function findByDigits(w, big){
 async function recognizeFile(w, file){
   const img = await loadBitmap(file);
   const big = scaled(img, 3000); img.close && img.close();
-  let best = null;
+  let best = null; const prods = [];
   const tryOne = async (canvas, psm) => {
     const o = await ocr(w, canvas, psm), r = parseLabel(o.text);
     r.conf = o.conf; r.q = quality(r);
+    if (r.prod) prods.push(r.prod);
     if (window.__ocrLog) window.__ocrLog.push({ psm, q: +r.q.toFixed(1), conf: Math.round(o.conf), text: o.text });
     if (!best || r.q > best.q) best = r;
     return r;
@@ -671,6 +672,11 @@ async function recognizeFile(w, file){
   }
   if (!good()) await tryOne(wholePhoto(big), 11);
   big.width = big.height = 0; // free memory early on iPhone
+  // name: the catalogue product seen most confidently across all attempts on this photo
+  if (best && !best.prod && prods.length){
+    const tally = new Map(); for (const m of prods) tally.set(m.p, (tally.get(m.p) || 0) + m.sim);
+    const [p] = [...tally].sort((a, b) => b[1] - a[1])[0]; best.name = p; best.prod = { p };
+  }
   return best;
 }
 
@@ -781,15 +787,23 @@ function cleanName(l){
 function parseLabel(text){
   const lines = text.split(/\n+/).map(s => s.replace(/\s+/g," ").trim()).filter(Boolean);
   // name: best "wordy" line before the first date line (+ next line if it continues the name, e.g. brand in quotes)
-  let name = "", nameScore = 0, firstDateLine = lines.findIndex(l => findDates(l).length);
+  let prod = null, name = "", nameScore = 0, firstDateLine = lines.findIndex(l => findDates(l).length);
   if (firstDateLine < 0) firstDateLine = lines.length;
   let bi = -1;
-  lines.forEach((l, i) => { const s = wordScore(l) * (i < firstDateLine ? 1 : 0.5); if (s > nameScore){ nameScore = s; bi = i; } });
+  const unbrand = l => l.replace(BRANDS, " ").replace(/\S+["»”](?=\s|$|[(,])/g, " ").replace(/["«“„][^"»”]{0,40}["»”]?/g, " ");
+  lines.forEach((l, i) => { const s = wordScore(unbrand(l)) * (i < firstDateLine ? 1 : 0.5); if (s > nameScore){ nameScore = s; bi = i; } });
   if (bi >= 0){
     name = cleanName(lines[bi]);
     const nx = lines[bi + 1];
     if (nx && bi + 1 < firstDateLine && wordScore(nx) >= (/^["«]/.test(nx) ? 0.3 : 0.8) && name.length < 30) name = (name + " " + cleanName(nx)).trim();
     name = rememberedName(name);
+  }
+  // catalogue: look at the text above the dates (name may wrap to two lines or lose its first letters)
+  {
+    const fd = lines.findIndex(l => findDates(l).length);
+    const head = lines.slice(0, fd < 0 ? lines.length : fd).filter(l => /[А-Яа-яЁё]{2}/.test(l)).join(" ");
+    const mp = head && matchProduct(head);
+    if (mp && !knownNames.includes(name)){ name = mp.p; nameScore = Math.max(nameScore, 1.5 + mp.sim * 1.5); prod = mp; }
   }
 
   const ds = findDates(text);
@@ -839,17 +853,56 @@ function parseLabel(text){
   else if (others.length === 1) note = dateLines >= 3 ? `Достали ${short(others[0])}` : `Изготовлено/вскрыто ${short(others[0])}`;
   if (exp && exp.hh == null) note += (note ? " · " : "") + "время не найдено";
   return { name, nameScore, expires: exp ? iso(toDate(exp)) : "", note: note.trim(), raw: lines.join(" / "),
-           dates: near.length, timed: near.filter(x => x.hh != null).length, full: near.filter(x => x.hh != null && x.yy != null).length, incomplete, dateLines };
+           prod, dates: near.length, timed: near.filter(x => x.hh != null).length, full: near.filter(x => x.hh != null && x.yy != null).length, incomplete, dateLines };
+}
+
+// ---- product catalogue (from the pizzeria's stock list: semi-finished goods, ingredients, finished goods) ----
+const PRODUCTS = ["Додочизы", "Картофельные дольки", "Корж для пиццы", "Креветки в панировке", "Крылья барбекю", "Мини-тортилья", "Наггетсы куриные", "Омлет круглый", "Паста", "Пирог Зеленое-Яблоко Крамбл", "Пита", "Слоеное тесто мини", "Сырники", "Тесто 20", "Тесто 25", "Тесто 30", "Тесто 35", "Тортилья пшеничная 25см", "Фондан шоколадный", "Хэшбраун", "Чиабатта пшеничная", "Ананасы консерв", "Бекон слайсами", "БонаАква газ 0,5", "Брусника", "Брынза", "Ветчина", "Вода БонаАква газ 1л", "Говядина пряная", "Горячий сорбет Малина-клюква", "Горячий сорбет Манго-чили", "Гренки", "Итальянские травы", "Какао", "Картофель фри", "Колбаса Балыковая", "Колбаски классические", "Концентрат Голубика-Лайм-Мята", "Концентрат Грейпфрут-земляника-личи", "Концентрат Груша-Фейхоа", "Концентрат Инжир-Бузина", "Концентрат Клубника", "Концентрат Клубничный мохито", "Концентрат Лимон-мята", "Концентрат Малина Каламанси Драгонфрут", "Концентрат Персик", "Корица молотая", "Кофе зерно", "Креветки чищеные", "Куриный поп корн", "Лук красный", "Молоко", "Мороженое", "Напиток Nordic Tea «Апельсин Облепиха»", "Наполнитель Соленая Карамель", "Огурцы маринован.", "Пепперони", "Перец свежий", "Печенье Орео", "Пицца-соус", "Рубленая курочка", "Салат Айсберг", "Сахар песок", "Свиная шейка", "Сироп карамельный", "Сироп кокосовый", "Сироп ореховый", "Сироп Черный лес", "Смесь для мягкого мороженого", "Смесь сыров Чеддер и Пармезан", "Соус альфредо", "Соус барбекю", "Соус Брусничный", "Соус бургер", "Соус грибной", "Соус Гриль", "Соус масала", "Соус песто", "Соус пломбирный", "Соус Сацебели", "Соус Сладкий чили", "Соус сливочный хрен", "Соус сырный", "Соус Терияки", "Соус Том ям", "Соус трюфельный", "Соус Фирменный", "Соус чесночный ранч", "Сыр Блю Чиз", "Сыр моцарелла", "Сыр чеддер палочки", "Томат черри", "Томаты свежие", "Халапеньо консерв.", "Цыпленок филе", "Чеснок сухой", "Чизибайтсы", "Чоризо", "Шампиньоны свежие", "Шоколадный соус", "Айсти со вкусом лесных ягод", "Айсти со вкусом лимона", "БонаАква 0,5 негазированная", "Варенье малиновое", "Вафельный рожок", "Детский сок “Добрый” Яблоко 0,2 л", "Добрый Апельсин 0,5", "Добрый Киви-Виноград 0.5", "Добрый Кола 0,5", "Добрый Кола 0,5 без сахара", "Добрый кола 1", "Добрый Кола дыня 0,5", "Добрый Кола малина 0.5", "Добрый Лайм-Лимон 0,5", "Добрый Ледяной Лимон 0,5", "Добрый Манго-Маракуйя 0,5", "Добрый Pulpy Апельсин 0,45 л", "Квас 0,5л", "Кукис шоколадный", "Лимонад арбузный лайм 0,5", "Макаронс Штрудель и соленая карамель", "Маффин соленая карамель", "Маффин три шоколада", "Молоко сгущенное в стиках", "Морс вишня 0,45л", "Морс клюква 0,45л", "Морс черная смородина 0,45л", "Муравьешки Пирожное", "Нектар Добрый 1л Яблоко-вишня-рябина", "Пирожное со вкусом Лимончелло", "Пломбир Додокрошка", "Сок Добрый 0,3 апельсин-мандарин", "Сок Добрый 0,3 мультифрукт", "Сок Добрый 0,3 яблоко", "Сок Добрый 1л апельсин", "Сок Добрый 1л апельсин-мандарин", "Сок Добрый 1л мультифрукт", "Сок Добрый 1л яблоко", "Сорбет Клубничный гранат (мороженое)", "Сорбет Лимонный фреш (мороженое)", "Соус 1000 островов порционный", "Соус Бальзамический порционный", "Соус Барбекю порционный", "Соус Малиновый порционный", "Соус Ранч порционный", "Соус Сырный порционный", "Соус Цезарь порционный", "Тирамису (новый)", "Торт Рикотта с грушей", "Торт шоколадно-малиновый", "Чай зеленый сенча", "Чай Рич зеленый 0,5л", "Чай Рич зеленый с манго 0,5л", "Чай Рич черный с лимоном 0,5л", "Чай таежный", "Чай черный", "Чай черный Пряное солнце", "Чизкейк Карамельный с арахисом", "Чизкейк Нью-Йорк", "Чипсы Lay’s Maxx"];
+const normName = t => t.toLowerCase().replace(/ё/g, "е").replace(/[^а-яa-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+const PROD_N = PRODUCTS.map(p => ({ p, n: normName(p) }));
+// Best catalogue match anywhere inside the OCR'd text (the sticker adds a brand, temperatures, may cut the first letters).
+// suppliers printed on the stickers (in quotes) — never a product name
+const BRANDS = /северн\S*\s*молок\S*|павловск\S*\s*слобод\S*|локальн\S*|агроник\S*|пир.?пак|дымов\S*|эрманн\S*|cook\s*me/gi;
+function matchProduct(text){
+  // drop the brand in quotes ("МДБ", "Северное Молоко") and storage temperatures — they are not the product
+  text = text.replace(BRANDS, " ").replace(/\S+["»”](?=\s|$|[(,])/g, " ").replace(/["«“„][^"»”]{0,40}["»”]?/g, " ").replace(/\([^)]*\)?/g, " ");
+  const t = normName(text); if (t.length < 3) return null;
+  let best = null;
+  for (const { p, n } of PROD_N){
+    if (n.length < 3) continue;
+    const L = n.length; let bs = 0;
+    // slide a window of about the product's length over the text
+    for (let i = -2; i <= t.length - Math.max(3, L - 3); i++){
+      for (const dl of [-2, 0, 2]){
+        const a = Math.max(0, i), b = Math.min(t.length, i + L + dl); if (b - a < 3) continue;
+        const sc = 1 - lev(t.slice(a, b), n) / L; if (sc > bs) bs = sc;
+      }
+    }
+    // longer names are more trustworthy at the same score
+    const score = bs + Math.min(L, 20) / 200;
+    if (!best || score > best.score) best = { p, sim: bs, score };
+  }
+  if (best && best.sim >= (best.p.length >= 10 ? 0.62 : 0.72)) return best;
+  // first letters cut off by the container rim: a distinctive word that belongs to exactly one product
+  const words = t.split(" ").filter(x => x.length >= 5);
+  const hits = new Map();
+  for (const { p, n } of PROD_N) for (const pw of n.split(" ")) if (pw.length >= 6)
+    for (const ow of words){ const sc = 1 - lev(ow, pw) / pw.length; if (sc >= 0.8) hits.set(p, Math.max(hits.get(p) || 0, sc)); }
+  if (hits.size === 1){ const [p, sc] = [...hits][0]; return { p, sim: sc * 0.8, score: sc, partial: true }; }
+  return null;
 }
 
 // ---- remembered product names (learned from your corrections) ----
 const NAMES = "srok-names-v1";
 let knownNames = []; try { knownNames = JSON.parse(localStorage.getItem(NAMES) || "[]"); } catch(e){}
+function fillNames(){
+  const dl = $("names"); if (dl) dl.replaceChildren(...[...knownNames, ...PRODUCTS.filter(p => !knownNames.includes(p))].map(v => { const o = document.createElement("option"); o.value = v; return o; }));
+}
 function learnName(nm){
-  nm = (nm || "").trim(); if (nm.length < 3) return;
+  nm = (nm || "").trim(); if (nm.length < 3) return fillNames();
   knownNames = [nm, ...knownNames.filter(x => x.toLowerCase() !== nm.toLowerCase())].slice(0, 300);
   try { localStorage.setItem(NAMES, JSON.stringify(knownNames)); } catch(e){}
-  const dl = $("names"); if (dl) dl.replaceChildren(...knownNames.map(v => { const o = document.createElement("option"); o.value = v; return o; }));
+  fillNames();
 }
 function lev(a, b){
   const v = Array.from({length: b.length + 1}, (_, i) => i);
