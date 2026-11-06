@@ -10,6 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Сроки">
 <meta name="format-detection" content="telephone=no">
+<script>try{var p=localStorage.getItem("srok-palette"),m=localStorage.getItem("srok-mode");if(p&&p!=="pagoda")document.documentElement.dataset.palette=p;if(m==="light"||m==="dark")document.documentElement.dataset.theme=m;}catch(e){}</script>
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
@@ -37,6 +38,29 @@
   --accent:#e3a994; --accent-ink:#3a1a08; --title:#e9d6cf; --peach:#e3a994;
   --today:#f0a585; --today-bg:#3d2418; --expired:#f08a7c; --expired-bg:#3e1f1b;
   --ok:#b9bc9a; --ok-bg:#2c2e22; --unk:#e0c072; --unk-bg:#352c16; color-scheme:dark}
+/* Other palettes (user's moodboards); the default above is «Пагода». Each has a light and a dark set. */
+:root[data-palette="night"]{--bg:#f7eed6; --surface:#fffbf0; --fg:#14181a; --muted:#5e5a4c; --line:#e6d9b5; --accent:#263a38; --accent-ink:#f4d894; --title:#263a38; --peach:#f0c040; --today:#b4481b; --today-bg:#f6d6bf; --expired:#a3261c; --expired-bg:#f3d2c8; --ok:#2e5a55; --ok-bg:#dde6df; --unk:#8a6400; --unk-bg:#f6e3a6; color-scheme:light}
+@media (prefers-color-scheme:dark){:root[data-palette="night"]:not([data-theme="light"]){--bg:#0b0d0b; --surface:#172322; --fg:#f4e7c2; --muted:#a9a58e; --line:#2a3a38; --accent:#f0c040; --accent-ink:#1a1405; --title:#f4d894; --peach:#d2602a; --today:#f08a4e; --today-bg:#3a2010; --expired:#f0705e; --expired-bg:#3b1712; --ok:#8fc2b4; --ok-bg:#1c3532; --unk:#f0c040; --unk-bg:#352a0c; color-scheme:dark}}
+:root[data-palette="night"][data-theme="dark"]{--bg:#0b0d0b; --surface:#172322; --fg:#f4e7c2; --muted:#a9a58e; --line:#2a3a38; --accent:#f0c040; --accent-ink:#1a1405; --title:#f4d894; --peach:#d2602a; --today:#f08a4e; --today-bg:#3a2010; --expired:#f0705e; --expired-bg:#3b1712; --ok:#8fc2b4; --ok-bg:#1c3532; --unk:#f0c040; --unk-bg:#352a0c; color-scheme:dark}
+:root[data-palette="shrine"]{--bg:#f2eee0; --surface:#fffdf7; --fg:#2a1416; --muted:#6b5e57; --line:#e3dcc6; --accent:#6e1a22; --accent-ink:#f2eee0; --title:#6e1a22; --peach:#de4b40; --today:#b33427; --today-bg:#f7d3cb; --expired:#6e1a22; --expired-bg:#ebcdd0; --ok:#2a5e50; --ok-bg:#d6e6de; --unk:#8a6a1e; --unk-bg:#efe2bc; color-scheme:light}
+@media (prefers-color-scheme:dark){:root[data-palette="shrine"]:not([data-theme="light"]){--bg:#161112; --surface:#22191a; --fg:#f2eee0; --muted:#b9aba0; --line:#3a2c2c; --accent:#de4b40; --accent-ink:#fff5ee; --title:#dfc98e; --peach:#dfc98e; --today:#f2836f; --today-bg:#3d1d18; --expired:#e96a74; --expired-bg:#3a1519; --ok:#7cc0a9; --ok-bg:#17302a; --unk:#dfc98e; --unk-bg:#33290f; color-scheme:dark}}
+:root[data-palette="shrine"][data-theme="dark"]{--bg:#161112; --surface:#22191a; --fg:#f2eee0; --muted:#b9aba0; --line:#3a2c2c; --accent:#de4b40; --accent-ink:#fff5ee; --title:#dfc98e; --peach:#dfc98e; --today:#f2836f; --today-bg:#3d1d18; --expired:#e96a74; --expired-bg:#3a1519; --ok:#7cc0a9; --ok-bg:#17302a; --unk:#dfc98e; --unk-bg:#33290f; color-scheme:dark}
+:root[data-palette="wave"]{--bg:#f3e6d3; --surface:#fdf7ee; --fg:#18203f; --muted:#6e5e52; --line:#e2d1ba; --accent:#18203f; --accent-ink:#f3e6d3; --title:#18203f; --peach:#5b7fa6; --today:#a84a42; --today-bg:#f2d3c8; --expired:#8a2e2a; --expired-bg:#edcfcb; --ok:#4e6440; --ok-bg:#dde4d2; --unk:#806316; --unk-bg:#efe0be; color-scheme:light}
+@media (prefers-color-scheme:dark){:root[data-palette="wave"]:not([data-theme="light"]){--bg:#10152b; --surface:#1a2140; --fg:#f3e6d3; --muted:#a8a6b8; --line:#2c3557; --accent:#ead3b8; --accent-ink:#18203f; --title:#ead3b8; --peach:#5b7fa6; --today:#e8907f; --today-bg:#3a2128; --expired:#f07a70; --expired-bg:#3d1a20; --ok:#a9c08f; --ok-bg:#202e26; --unk:#e2c478; --unk-bg:#33301c; color-scheme:dark}}
+:root[data-palette="wave"][data-theme="dark"]{--bg:#10152b; --surface:#1a2140; --fg:#f3e6d3; --muted:#a8a6b8; --line:#2c3557; --accent:#ead3b8; --accent-ink:#18203f; --title:#ead3b8; --peach:#5b7fa6; --today:#e8907f; --today-bg:#3a2128; --expired:#f07a70; --expired-bg:#3d1a20; --ok:#a9c08f; --ok-bg:#202e26; --unk:#e2c478; --unk-bg:#33301c; color-scheme:dark}
+:root[data-palette="sakura"]{--bg:#f6efdc; --surface:#fffcf3; --fg:#3a372f; --muted:#77736a; --line:#e6deca; --accent:#a85252; --accent-ink:#fff8f2; --title:#8a3e44; --peach:#dfb0b3; --today:#a3473f; --today-bg:#f4d4d2; --expired:#8e2f33; --expired-bg:#efcbcd; --ok:#5e6b47; --ok-bg:#e3e3cf; --unk:#7f6a2e; --unk-bg:#ede3c4; color-scheme:light}
+@media (prefers-color-scheme:dark){:root[data-palette="sakura"]:not([data-theme="light"]){--bg:#1e1d19; --surface:#2a2823; --fg:#f6efdc; --muted:#bfb59a; --line:#3d3a32; --accent:#dfb0b3; --accent-ink:#3a1e20; --title:#dfb0b3; --peach:#b86060; --today:#ee9c94; --today-bg:#3c2524; --expired:#f07d80; --expired-bg:#3e1c1f; --ok:#bfc59a; --ok-bg:#2b2e22; --unk:#e3cc85; --unk-bg:#353017; color-scheme:dark}}
+:root[data-palette="sakura"][data-theme="dark"]{--bg:#1e1d19; --surface:#2a2823; --fg:#f6efdc; --muted:#bfb59a; --line:#3d3a32; --accent:#dfb0b3; --accent-ink:#3a1e20; --title:#dfb0b3; --peach:#b86060; --today:#ee9c94; --today-bg:#3c2524; --expired:#f07d80; --expired-bg:#3e1c1f; --ok:#bfc59a; --ok-bg:#2b2e22; --unk:#e3cc85; --unk-bg:#353017; color-scheme:dark}
+.theme-btn{font-size:13px;font-weight:600;padding:6px 12px;min-height:34px;border-radius:999px}
+.sheet{overflow-y:auto}
+.pal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.pal{display:flex;flex-direction:column;gap:8px;align-items:stretch;text-align:left;padding:10px;border-radius:12px;min-height:0}
+.pal[aria-pressed="true"]{outline:3px solid var(--accent);outline-offset:1px}
+.pal .sw{display:flex;height:28px;border-radius:8px;overflow:hidden;border:1px solid var(--line)}
+.pal .sw i{flex:1}
+.modes{display:flex;gap:6px}
+.modes button{flex:1 1 0;padding:8px 6px;min-height:40px;font-size:14px}
+.modes button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 img{max-width:100%}
@@ -135,7 +159,7 @@ body.has-fab{padding-bottom:max(110px,calc(env(safe-area-inset-bottom,0px) + 90p
   <header>
     <h1>Контроль сроков</h1>
     <span class="date" id="today"></span>
-    <div class="ver" id="ver"><span>Версия <b id="verNum"></b></span><span>Распознавание: <b id="engineName">загружается…</b></span></div>
+    <div class="ver" id="ver"><span>Версия <b id="verNum"></b></span><span>Распознавание: <b id="engineName">загружается…</b></span><button class="theme-btn" id="themeBtn">🎨 Оформление</button></div>
   </header>
 
   <p class="install" id="installTip" hidden><span>Чтобы установить как приложение: нажмите <strong>«Поделиться»</strong> внизу Safari → <strong>«На экран „Домой“»</strong>.</span><button id="installClose" aria-label="Скрыть подсказку">✕</button></p>
@@ -197,6 +221,21 @@ body.has-fab{padding-bottom:max(110px,calc(env(safe-area-inset-bottom,0px) + 90p
 
 <datalist id="names"></datalist>
 <button class="fab" id="fab" hidden>📋 Списать <b id="fabN">0</b></button>
+<div class="sheet-bg" id="themeBg" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="themeTitle">
+    <div class="sheet-head"><h2 id="themeTitle">Оформление</h2><button id="themeClose">Готово</button></div>
+    <div class="pal-grid" id="palGrid">
+      <button class="pal" data-pal="pagoda" aria-pressed="false"><span class="sw"><i style="background:#e0cbc6"></i><i style="background:#e3a994"></i><i style="background:#6b3410"></i><i style="background:#4a4c3a"></i></span><b>Пагода</b></button>
+      <button class="pal" data-pal="night" aria-pressed="false"><span class="sw"><i style="background:#0b0d0b"></i><i style="background:#263a38"></i><i style="background:#f4d894"></i><i style="background:#f0c040"></i><i style="background:#d2602a"></i></span><b>Ночной храм</b></button>
+      <button class="pal" data-pal="shrine" aria-pressed="false"><span class="sw"><i style="background:#2a5e50"></i><i style="background:#dfc98e"></i><i style="background:#f2eee0"></i><i style="background:#de4b40"></i><i style="background:#6e1a22"></i></span><b>Красный храм</b></button>
+      <button class="pal" data-pal="wave" aria-pressed="false"><span class="sw"><i style="background:#6e4e3e"></i><i style="background:#6a7f58"></i><i style="background:#ead3b8"></i><i style="background:#5b7fa6"></i><i style="background:#18203f"></i><i style="background:#a84a42"></i></span><b>Волна</b></button>
+      <button class="pal" data-pal="sakura" aria-pressed="false"><span class="sw"><i style="background:#8a877a"></i><i style="background:#bfb59a"></i><i style="background:#f6efdc"></i><i style="background:#dfb0b3"></i><i style="background:#b86060"></i></span><b>Сакура</b></button>
+    </div>
+    <div class="modes" role="group" aria-label="Светлое или тёмное">
+      <button data-mode="auto" aria-pressed="false">Авто</button><button data-mode="light" aria-pressed="false">Светлое</button><button data-mode="dark" aria-pressed="false">Тёмное</button>
+    </div>
+  </div>
+</div>
 <div class="sheet-bg" id="sheetBg" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
     <div class="sheet-head"><h2 id="sheetTitle">Список на списание</h2><button id="sheetClose" aria-label="Закрыть">Готово</button></div>
@@ -216,13 +255,35 @@ const now = () => new Date();
 const ymd = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 const fmtDate = d => `${pad(d.getDate())}.${pad(d.getMonth()+1)}`;
 const fmtTime = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-const APP_VERSION = "2.2 · 06.11.2026";
+const APP_VERSION = "2.3 · 06.11.2026";
 const setEngine = t => { const e = document.getElementById("engineName"); if (e) e.textContent = t; };
 const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const standalone = window.navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
 const updateDate = () => { $("today").textContent = new Date().toLocaleDateString("ru-RU",{weekday:"long",day:"numeric",month:"long"}); };
 updateDate();
 $("verNum").textContent = APP_VERSION;
+
+// ---- appearance: palette (user's moodboards) + light/dark ----
+const root = document.documentElement;
+function applyLook(){
+  let pal = "pagoda", mode = "auto";
+  try { pal = localStorage.getItem("srok-palette") || "pagoda"; mode = localStorage.getItem("srok-mode") || "auto"; } catch(e){}
+  if (pal === "pagoda") delete root.dataset.palette; else root.dataset.palette = pal;
+  if (mode === "auto") delete root.dataset.theme; else root.dataset.theme = mode;
+  document.querySelectorAll("#palGrid .pal").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.pal === pal)));
+  document.querySelectorAll(".modes button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mode === mode)));
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = getComputedStyle(root).getPropertyValue("--bg").trim() || "#6b3410";
+}
+const setLook = (k, v) => { try { localStorage.setItem(k, v); } catch(e){} applyLook(); };
+document.querySelectorAll("#palGrid .pal").forEach(b => b.onclick = () => setLook("srok-palette", b.dataset.pal));
+document.querySelectorAll(".modes button").forEach(b => b.onclick = () => setLook("srok-mode", b.dataset.mode));
+$("themeBtn").onclick = () => { $("themeBg").hidden = false; document.body.style.overflow = "hidden"; };
+const closeTheme = () => { $("themeBg").hidden = true; document.body.style.overflow = ""; };
+$("themeClose").onclick = closeTheme;
+$("themeBg").onclick = e => { if (e.target === $("themeBg")) closeTheme(); };
+matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", applyLook);
+applyLook();
 
 // install hint for iPhone Safari
 try {
