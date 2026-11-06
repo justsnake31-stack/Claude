@@ -1,5 +1,5 @@
 // Offline cache: app shell + OCR library/model files downloaded on first run.
-const CACHE = "srok-v10";
+const CACHE = "srok-v11";
 const ENGINE = "srok-ocr-v1"; // big OCR engine files: kept across app updates
 const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon-180.png", "./icon-192.png", "./icon-512.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });

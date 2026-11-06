@@ -15,7 +15,6 @@
   - `parseLabel`, `findDates`, `fixDM`, `toDate` — разбор текста этикетки в название и сроки (самое важное и самое хрупкое);
   - `PRODUCTS` + `matchProduct`, `BRANDS` + `stripBrand` — каталог продуктов из выгрузки остатков и поставщики;
   - `APP_VERSION` — версия в шапке; `pump` — очередь фото; `listText` — окно «Список на списание».
-- «✨ Точный анализ» (`analyzeWithClaude`, `claudePump`, `claudeRecheck`) — фото читает Claude API (`claude-opus-5-5`, structured output, server-side fallbacks) с ключом пользователя из localStorage; SDK — `vendor/anthropic.bundle.js`. Ответ Claude прогоняется через тот же `parseLabel`, неуверенные цифры → ручная проверка.
 - `sw.js` — сервис-воркер: `CACHE` (приложение, network-first) и `ENGINE` (файлы `ocr/`, cache-first, ~38 МБ).
 - `ocr/` — самостоятельно размещённый движок (сборка `@paddleocr/paddleocr-js`, onnxruntime-web wasm, модели); как пересобрать — `ocr/README.md`. Не редактировать руками.
 - `lab/` — старая страница сравнения алгоритмов, в приложении не используется.

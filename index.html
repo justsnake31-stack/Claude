@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Контроль сроков</title>
-<meta name="theme-color" content="#0f7a5c">
+<meta name="theme-color" content="#6b3410">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -17,25 +17,26 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap">
 <style>
-/* Layout: one narrow working column, like a clipboard at the prep station: upload strip on top, write-off list as the main sheet, other groups below. */
+/* Layout: one narrow working column, like a clipboard at the prep station: upload strip on top, write-off list as the main sheet, other groups below.
+   Palette from the user's moodboard (pagoda photo): dusty rose, peach, rust brown, dark olive. */
 :root{
-  --bg:#f3f5f4; --surface:#ffffff; --fg:#17201d; --muted:#5d6b66; --line:#dfe5e2;
-  --accent:#0f7a5c; --accent-ink:#ffffff;
-  --today:#c2410c; --today-bg:#fff1e8; --expired:#b42318; --expired-bg:#fdecea;
-  --ok:#2f6f4f; --ok-bg:#e8f4ee; --unk:#8a6a00; --unk-bg:#fbf4dc;
+  --bg:#f1e6e2; --surface:#fbf6f4; --fg:#2b2720; --muted:#6e6158; --line:#e2d3ce;
+  --accent:#6b3410; --accent-ink:#fbf0ec; --title:#3a3c2d; --peach:#e3a994;
+  --today:#8a3a16; --today-bg:#f2c7b6; --expired:#9c2a1e; --expired-bg:#f1d5cf;
+  --ok:#4a4c3a; --ok-bg:#e1e0d2; --unk:#7d5e12; --unk-bg:#f0e4c9;
   --sans:"Golos Text",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
-  --bg:#111816; --surface:#19221f; --fg:#e7eeeb; --muted:#97a7a1; --line:#2a3632;
-  --accent:#3cc497; --accent-ink:#06261b;
-  --today:#ff9a5c; --today-bg:#3a2216; --expired:#ff7b70; --expired-bg:#3b1a18;
-  --ok:#7fd3a8; --ok-bg:#16302a; --unk:#e6c254; --unk-bg:#332b10; color-scheme:dark}}
+  --bg:#1c1a16; --surface:#26231e; --fg:#f0e4df; --muted:#b4a39b; --line:#3a352e;
+  --accent:#e3a994; --accent-ink:#3a1a08; --title:#e9d6cf; --peach:#e3a994;
+  --today:#f0a585; --today-bg:#3d2418; --expired:#f08a7c; --expired-bg:#3e1f1b;
+  --ok:#b9bc9a; --ok-bg:#2c2e22; --unk:#e0c072; --unk-bg:#352c16; color-scheme:dark}}
 :root[data-theme="dark"]{
-  --bg:#111816; --surface:#19221f; --fg:#e7eeeb; --muted:#97a7a1; --line:#2a3632;
-  --accent:#3cc497; --accent-ink:#06261b;
-  --today:#ff9a5c; --today-bg:#3a2216; --expired:#ff7b70; --expired-bg:#3b1a18;
-  --ok:#7fd3a8; --ok-bg:#16302a; --unk:#e6c254; --unk-bg:#332b10; color-scheme:dark}
+  --bg:#1c1a16; --surface:#26231e; --fg:#f0e4df; --muted:#b4a39b; --line:#3a352e;
+  --accent:#e3a994; --accent-ink:#3a1a08; --title:#e9d6cf; --peach:#e3a994;
+  --today:#f0a585; --today-bg:#3d2418; --expired:#f08a7c; --expired-bg:#3e1f1b;
+  --ok:#b9bc9a; --ok-bg:#2c2e22; --unk:#e0c072; --unk-bg:#352c16; color-scheme:dark}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 img{max-width:100%}
@@ -45,12 +46,12 @@ body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-
   padding-top:max(20px,env(safe-area-inset-top,0px));padding-bottom:max(48px,env(safe-area-inset-bottom,0px))}
 .wrap{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
 header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px}
-h1{font-size:24px;font-weight:700;margin:0;text-wrap:balance}
+h1{font-size:24px;font-weight:700;margin:0;text-wrap:balance;color:var(--title)}
 .date{font-family:var(--mono);font-size:14px;color:var(--muted)}
 .ver{flex-basis:100%;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--muted)}
 .ver b{font-weight:600;color:var(--fg)}
 .drop{background:var(--surface);border:2px dashed var(--line);border-radius:14px;padding:18px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
-.drop.over{border-color:var(--accent)}
+.drop.over{border-color:var(--peach)}
 .drop p{margin:0;color:var(--muted);min-width:0;flex:1 1 240px}
 .drop strong{color:var(--fg)}
 .drop .btns{display:flex;gap:8px;flex-wrap:wrap;flex:1 1 240px}
@@ -119,15 +120,9 @@ details.group>summary::-webkit-details-marker{display:none}
 .sheet .opts input{width:20px;height:20px;accent-color:var(--accent)}
 .sheet .btns{display:flex;gap:8px}
 .sheet .btns button{flex:1 1 0}
-.btn-claude{background:linear-gradient(135deg,#7c5cff,#c2410c);color:#fff;border-color:transparent}
-.drop .btns .btn-claude{flex-basis:100%}
-.claude-hint{flex-basis:100%!important;font-size:13px;margin:0!important}
-.sheet input[type=password],.sheet input[type=text]{font:inherit;font-size:16px;width:100%;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
-.sheet p{margin:0;color:var(--muted);font-size:14px}
-.sheet a{color:var(--accent)}
 .row .acts2{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
 .row .acts2 button{padding:6px 10px;font-size:13px;min-height:34px}
-.via{font-size:11px;font-weight:600;color:#7c5cff;border:1px solid #7c5cff55;border-radius:6px;padding:1px 6px;margin-left:6px;white-space:nowrap}
+
 body.has-fab{padding-bottom:max(110px,calc(env(safe-area-inset-bottom,0px) + 90px))}
 .foot{color:var(--muted);font-size:13px;margin:0}
 @media (prefers-reduced-motion:reduce){.bar>i{transition:none}}
@@ -150,12 +145,9 @@ body.has-fab{padding-bottom:max(110px,calc(env(safe-area-inset-bottom,0px) + 90p
     <div class="btns">
       <label class="btn btn-primary" for="cam">📷 Снять</label>
       <label class="btn" for="file">Из галереи</label>
-      <label class="btn btn-claude" for="fileClaude" id="claudeBtn">✨ Точный анализ</label>
     </div>
-    <p class="claude-hint">«Точный анализ» — фото смотрит Claude (Anthropic) через интернет, как человек. Нужен ваш ключ API, примерно $0,03–0,06 (≈3–6 ₽) за фото.</p>
     <input type="file" id="cam" accept="image/*" capture="environment">
     <input type="file" id="file" accept="image/*" multiple>
-    <input type="file" id="fileClaude" accept="image/*" multiple>
   </div>
 
   <p class="notice" id="noAi" hidden></p>
@@ -198,26 +190,13 @@ body.has-fab{padding-bottom:max(110px,calc(env(safe-area-inset-bottom,0px) + 90p
 
   <div style="display:flex;gap:8px;flex-wrap:wrap">
     <button id="clearBtn">Очистить всё и начать новый день</button>
-    <button id="keyBtn">✨ Ключ Claude</button>
     <span id="clearConfirm" hidden style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="meta">Точно удалить все результаты?</span><button id="clearYes">Да, очистить</button><button id="clearNo">Отмена</button></span>
   </div>
-  <p class="foot">Результаты сохраняются на этом телефоне до очистки. Фото после перезапуска приложения не показываются, остаются только названия и сроки. Проверяйте спорные позиции глазами: программа может ошибиться в цифрах, особенно на смятых или бликующих наклейках. Первый запуск требует интернета (загружается ~38 МБ), дальше обычное распознавание работает и без него. «Точный анализ» работает только с интернетом.</p>
+  <p class="foot">Результаты сохраняются на этом телефоне до очистки. Фото после перезапуска приложения не показываются, остаются только названия и сроки. Проверяйте спорные позиции глазами: программа может ошибиться в цифрах, особенно на смятых или бликующих наклейках. Первый запуск требует интернета (загружается ~38 МБ), дальше обычное распознавание работает и без него.</p>
 </div>
 
 <datalist id="names"></datalist>
 <button class="fab" id="fab" hidden>📋 Списать <b id="fabN">0</b></button>
-<div class="sheet-bg" id="keyBg" hidden>
-  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="keyTitle">
-    <div class="sheet-head"><h2 id="keyTitle">✨ Точный анализ — ключ Claude</h2><button id="keyClose">Закрыть</button></div>
-    <p>Фото этикеток отправляются в Claude (Anthropic) и читаются моделью, которая видит фото как человек. Нужен ваш ключ API:
-      зайдите на <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com → API Keys</a>,
-      пополните баланс и создайте ключ (начинается с <b>sk-ant-</b>).</p>
-    <p>Ключ хранится только на этом телефоне. Стоимость — примерно $0,03–0,06 (≈3–6 ₽) за фото, списывается с баланса Anthropic.</p>
-    <input type="password" id="keyInput" placeholder="sk-ant-…" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Ключ API Claude">
-    <p id="keyMsg"></p>
-    <div class="btns"><button class="btn-primary" id="keySave">Сохранить</button><button id="keyDel">Удалить ключ</button></div>
-  </div>
-</div>
 <div class="sheet-bg" id="sheetBg" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
     <div class="sheet-head"><h2 id="sheetTitle">Список на списание</h2><button id="sheetClose" aria-label="Закрыть">Готово</button></div>
@@ -237,7 +216,7 @@ const now = () => new Date();
 const ymd = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 const fmtDate = d => `${pad(d.getDate())}.${pad(d.getMonth()+1)}`;
 const fmtTime = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-const APP_VERSION = "2.1 · 02.11.2026";
+const APP_VERSION = "2.2 · 06.11.2026";
 const setEngine = t => { const e = document.getElementById("engineName"); if (e) e.textContent = t; };
 const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const standalone = window.navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
@@ -290,11 +269,7 @@ function rowEl(it, cls){
   const right = document.createElement("div"); right.className = "time";
   const d = parseExp(it.expires);
   if (d){ right.textContent = cls==="ok" ? fmtDate(d) : fmtTime(d); const s=document.createElement("small"); s.textContent = cls==="ok" ? fmtTime(d) : (cls==="exp" && ymd(d)!==ymd(now()) ? fmtDate(d) : "годен до"); right.append(s); }
-  if (it.via === "claude"){ const v=document.createElement("span"); v.className="via"; v.textContent="✨ Claude"; nm.append(v); }
   const acts = document.createElement("div"); acts.className = "acts2";
-  if (!it.example && it.url && it.status === "done"){ // the photo is still in memory: offer a precise re-read
-    const c=document.createElement("button"); c.textContent = it.claudeBusy ? "✨ Читаю…" : "✨ Точно"; c.disabled = !!it.claudeBusy;
-    c.onclick=()=>claudeRecheck(it); acts.append(c); }
   if (!it.example && (cls==="unk")){ mid.append(editor(it)); if (acts.children.length) mid.append(acts); }
   else if (!it.example){ const b=document.createElement("button"); b.textContent="Исправить"; b.onclick=()=>{ acts.replaceWith(editor(it)); }; acts.prepend(b); mid.append(acts); }
   li.append(img, mid, right);
@@ -1045,10 +1020,9 @@ function rememberedName(nm){
 }
 
 function updateProgress(){
-  const claudeBusy = claudeQueue.length > 0 || claudeRunning > 0;
-  $("progress").hidden = !running && !queue.length && !claudeBusy;
+  $("progress").hidden = !running && !queue.length;
   $("barFill").style.width = total ? (doneCount/total*100) + "%" : "0";
-  if (workers || paddle || claudeBusy) $("progText").textContent = `Прочитано ${doneCount} из ${total} фото` + (claudeBusy ? " · ✨ Claude" : "");
+  if (workers || paddle) $("progText").textContent = `Прочитано ${doneCount} из ${total} фото`;
 }
 // put a recognition result on an item, applying the safety rules (unsure → manual check, never a guessed expiry)
 function applyResult(it, r){
@@ -1104,154 +1078,6 @@ async function pump(){
 }
 $("stopBtn").onclick = () => { stopFlag = true; };
 if (/[?&]debug/.test(location.search)) window.__ocr = { findLabels, prepCrop, loadBitmap, scaled, parseLabel };
-
-// ===== "Точный анализ": Claude reads the photo itself (Claude API, the user's own key, via the internet) =====
-const CLAUDE_MODEL = "claude-opus-5-5";
-const KEY_STORE = "srok-claude-key";
-const getKey = () => { try { return localStorage.getItem(KEY_STORE) || ""; } catch(e){ return ""; } };
-let anthropicCtor = null;
-async function claudeClient(){
-  if (!anthropicCtor) anthropicCtor = (await import("./vendor/anthropic.bundle.js")).Anthropic;
-  // the key never leaves this phone except to Anthropic's API
-  return new anthropicCtor({ apiKey: getKey(), dangerouslyAllowBrowser: true, maxRetries: 2 });
-}
-const CLAUDE_SCHEMA = {
-  type: "object", additionalProperties: false,
-  required: ["label_found", "name", "catalog_name", "dates", "unclear", "comment"],
-  properties: {
-    label_found: { type: "boolean" },
-    name: { type: "string" },
-    catalog_name: { type: "string" },
-    dates: { type: "array", items: { type: "object", additionalProperties: false, required: ["date", "time", "certain"],
-      properties: { date: { type: "string" }, time: { type: "string" }, certain: { type: "boolean" } } } },
-    unclear: { type: "boolean" },
-    comment: { type: "string" },
-  },
-};
-const claudeSystem = () => `Ты читаешь термо-этикетку (маркировку) на контейнере с продуктом на кухне пиццерии по фото.
-Формат этикетки: название продукта, поставщик в кавычках (например "Локальный", "МДБ", "РБК"), условия хранения в скобках (например (+2 +6)), затем 2 или 3 строки дат вида ДД.ММ.ГГ, ЧЧ:ММ.
-2 даты = изготовлено/вскрыто, годен до. 3 даты = достали, разморозится, годен до.
-Наклейка может быть повёрнута, перевёрнута, изогнута, частично закрыта бортиком, с бликами.
-
-Верни:
-- label_found: есть ли на фото такая этикетка;
-- name: название продукта, как напечатано (без поставщика и без условий хранения); если верх срезан — то, что видно;
-- catalog_name: точное название из списка ниже, если продукт однозначно из него, иначе пустая строка;
-- dates: ВСЕ строки дат строго в порядке сверху вниз, как напечатано: date "ДД.ММ.ГГ", time "ЧЧ:ММ" (или "" если времени нет). certain=false, если хоть одна цифра в этой строке читается неуверенно (смазана, блик, срезана, 1/7, 3/8, 0/6 и т.п.);
-- unclear: true, если этикетку в целом трудно прочитать;
-- comment: коротко по-русски, что мешало (или пусто).
-Никогда не угадывай цифры: если не видно — certain=false. Если на фото несколько одинаковых этикеток, читай одну, самую чёткую. Не придумывай строки, которых нет.
-
-Список продуктов (каталог):
-${PRODUCTS.join("\n")}`;
-async function imageForClaude(file){
-  const img = await loadBitmap(file);
-  const c = rotScaled(img, 0, 1600); img.close && img.close();
-  const data = c.toDataURL("image/jpeg", 0.88).split(",")[1]; c.width = c.height = 0;
-  return data;
-}
-async function analyzeWithClaude(file){
-  const client = await claudeClient();
-  const data = await imageForClaude(file);
-  const resp = await client.beta.messages.create({
-    model: CLAUDE_MODEL,
-    max_tokens: 8000,
-    // if Claude's safeguards ever decline a photo, the API retries it on a fallback model by itself
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default",
-    output_config: { effort: "medium", format: { type: "json_schema", schema: CLAUDE_SCHEMA } },
-    system: [{ type: "text", text: claudeSystem(), cache_control: { type: "ephemeral" } }],
-    messages: [{ role: "user", content: [
-      { type: "image", source: { type: "base64", media_type: "image/jpeg", data } },
-      { type: "text", text: "Прочитай этикетку на этом фото." },
-    ] }],
-  });
-  if (resp.stop_reason === "refusal") throw Object.assign(new Error("refusal"), { kind: "refusal" });
-  const txt = resp.content.filter(b => b.type === "text").map(b => b.text).join("");
-  const j = JSON.parse(txt);
-  if (!j.label_found || !j.dates.length){
-    return { name: j.catalog_name || j.name || "", expires: "", raw: "", note: "✨ Claude: " + (j.comment || "этикетка на фото не найдена"), timed: 0 };
-  }
-  // run Claude's reading through the same rules as the on-phone engine (order, last date = expiry, far dates, missing time)
-  const text = [j.name || j.catalog_name || "", ...j.dates.map(d => d.date + (d.time ? ", " + d.time : ""))].join("\n");
-  const r = parseLabel(text);
-  if (j.catalog_name) r.name = j.catalog_name;
-  r.conf = 100;
-  if (j.dates.some(d => !d.certain) && r.expires){
-    const last = j.dates[j.dates.length - 1];
-    if (!last.certain || j.dates.length < 2) r.incomplete = true; // the expiry itself is unsure → human check
-    else r.extraNote = "проверьте";
-  }
-  r.raw = "Claude: " + j.dates.map(d => d.date + " " + d.time + (d.certain ? "" : "?")).join(" / ") + (j.comment ? " — " + j.comment : "");
-  return r;
-}
-function claudeErrorText(e){
-  const st = e && e.status;
-  if (st === 401) return "Ключ Claude не подходит — проверьте его (кнопка «✨ Ключ Claude» внизу)";
-  if (st === 400 && /credit|balance/i.test(e.message || "")) return "На балансе Anthropic закончились средства";
-  if (st === 429) return "Слишком много запросов к Claude — попробуйте через минуту";
-  if (e && e.kind === "refusal") return "Claude отказался читать это фото";
-  if (!navigator.onLine || /fetch|network|connection/i.test(String(e && e.message))) return "Нет интернета — точный анализ работает только онлайн";
-  return "Claude не смог прочитать фото: " + String(e && e.message || e).slice(0, 120);
-}
-function openKey(msg){
-  $("keyInput").value = getKey(); $("keyMsg").textContent = msg || "";
-  $("keyBg").hidden = false; document.body.style.overflow = "hidden";
-}
-function closeKey(){ $("keyBg").hidden = true; document.body.style.overflow = ""; }
-$("keyBtn").onclick = () => openKey();
-$("keyClose").onclick = closeKey;
-$("keyBg").onclick = e => { if (e.target === $("keyBg")) closeKey(); };
-$("keySave").onclick = () => {
-  const k = $("keyInput").value.trim();
-  if (!/^sk-ant-/.test(k)){ $("keyMsg").textContent = "Ключ должен начинаться с sk-ant-"; return; }
-  try { localStorage.setItem(KEY_STORE, k); } catch(e){}
-  closeKey(); if (pendingClaude) { const f = pendingClaude; pendingClaude = null; f(); }
-};
-$("keyDel").onclick = () => { try { localStorage.removeItem(KEY_STORE); } catch(e){} $("keyInput").value = ""; $("keyMsg").textContent = "Ключ удалён с телефона."; };
-let pendingClaude = null;
-// "✨ Точный анализ" button: no key yet → ask for it first, then open the photo picker
-$("claudeBtn").addEventListener("click", e => {
-  if (!getKey()){ e.preventDefault(); pendingClaude = () => $("fileClaude").click(); openKey("Сначала вставьте ключ — потом выберите фото."); }
-});
-const claudeQueue = []; let claudeRunning = 0;
-async function claudePump(){
-  while (claudeQueue.length && claudeRunning < 3){     // up to 3 photos in parallel
-    const it = claudeQueue.shift(); claudeRunning++;
-    (async () => {
-      it.claudeBusy = true; render();
-      try {
-        const file = it.file || await (await fetch(it.url)).blob();
-        const r = await analyzeWithClaude(file);
-        applyResult(it, r); it.via = "claude";
-      } catch(e){
-        if (!it.name && !it.expires){ it.expires = ""; }
-        it.note = claudeErrorText(e);
-        if (e && e.status === 401) openKey(claudeErrorText(e));
-      }
-      it.claudeBusy = false; it.status = "done"; it.file = null; doneCount++;
-      save(); render(); updateProgress(); claudeRunning--;
-      if (!claudeQueue.length && !claudeRunning && !running){ total = 0; doneCount = 0; updateProgress(); }
-      claudePump();
-    })();
-  }
-}
-function addClaudeFiles(files){
-  const imgs = [...files].filter(f => /^image\//.test(f.type) || /\.(jpe?g|png|webp|heic|heif)$/i.test(f.name || ""));
-  if (!imgs.length) return;
-  showExamples = false;
-  imgs.forEach((f, k) => { const it = { id: Date.now().toString(36) + "-c" + k + "-" + Math.random().toString(36).slice(2, 6), file: f, url: URL.createObjectURL(f), name: "", expires: "", note: "✨ Claude читает…", status: "pending", src: f.name }; items.push(it); claudeQueue.push(it); });
-  total += imgs.length; $("progress").hidden = false; $("progText").textContent = `Прочитано ${doneCount} из ${total} фото`;
-  render(); claudePump();
-}
-// re-read one already processed photo with Claude
-function claudeRecheck(it){
-  if (!getKey()){ pendingClaude = () => claudeRecheck(it); openKey("Вставьте ключ — и фото будет прочитано заново."); return; }
-  if (it.claudeBusy) return;
-  total += 1; $("progress").hidden = false;
-  claudeQueue.push(it); render(); claudePump();
-}
-$("fileClaude").onchange = e => { addClaudeFiles(e.target.files); e.target.value = ""; };
 
 function addFiles(files){
   const imgs = [...files].filter(f => /^image\//.test(f.type) || /\.(jpe?g|png|webp|heic|heif)$/i.test(f.name || ""));
